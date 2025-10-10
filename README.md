@@ -27,6 +27,7 @@ az aks create \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${CLUSTER_NAME}" \
     --location "${LOCATION}" \
+    --kubernetes-version 1.33 \
     --enable-oidc-issuer \
     --enable-workload-identity \
     --generate-ssh-keys
@@ -94,4 +95,29 @@ az identity federated-credential create \
     --issuer "${AKS_OIDC_ISSUER}" \
     --subject system:serviceaccount:"${SERVICE_ACCOUNT_NAMESPACE}":"${SERVICE_ACCOUNT_NAME}" \
     --audience api://AzureADTokenExchange
+```
+
+## Step 7: Create an Azure Container Registry (ACR)
+
+```bash
+export ACR_NAME="acrmirror${RANDOM_ID}"
+
+az acr create \
+    --name "${ACR_NAME}" \
+    --resource-group "${RESOURCE_GROUP}" \
+    --location "${LOCATION}" \
+    --sku Premium
+
+# Enable artifact cache for all repositories from mcr.microsoft.com
+az acr cache create \
+    --registry "${ACR_NAME}" \
+    --name mcr-microsoft-cache \
+    --source-repo "mcr.microsoft.com/*" \
+    --target-repo "*"
+
+# Assign AcrPull role to the managed identity
+az role assignment create \
+    --assignee "${USER_ASSIGNED_CLIENT_ID}" \
+    --role AcrPull \
+    --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
