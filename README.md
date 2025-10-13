@@ -30,7 +30,9 @@ az aks create \
     --kubernetes-version 1.33 \
     --enable-oidc-issuer \
     --enable-workload-identity \
+    --node-vm-size "Standard_D2s_v5" \
     --generate-ssh-keys
+az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 ```
 
 ## Step 3: Retrieve the OIDC Issuer URL

@@ -3,69 +3,18 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: credential-provider-config
-  labels:
-    app: nsenter
-data:
-  credential-provider-config.yaml: |
-    apiVersion: kubelet.config.k8s.io/v1
-    kind: CredentialProviderConfig
-    providers:
-    - name: acr-credential-provider
-      matchImages:
-      - "*.azurecr.io"
-      - "*.azurecr.cn"
-      - "*.azurecr.de"
-      - "*.azurecr.us"
-      defaultCacheDuration: "10m"
-      apiVersion: credentialprovider.kubelet.k8s.io/v1
-      exec:
-        command: /opt/azure-acr-credential-provider
-        apiVersion: credentialprovider.kubelet.k8s.io/v1
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kubelet-systemd-config
-  labels:
-    app: nsenter
-data:
-  20-credential-provider.conf: |
-    [Service]
-    Environment="KUBELET_CREDENTIAL_PROVIDER_ARGS=--image-credential-provider-config=/etc/kubernetes/credential-provider/credential-provider-config.yaml --image-credential-provider-bin-dir=/opt --feature-gates=KubeletServiceAccountTokenForCredentialProviders=true"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kubelet-default-config
-  labels:
-    app: nsenter
-data:
-  kubelet-extra-args: |
-    # Credential Provider Configuration
-    KUBELET_EXTRA_ARGS="--image-credential-provider-config=/etc/kubernetes/credential-provider/credential-provider-config.yaml --image-credential-provider-bin-dir=/opt --feature-gates=KubeletServiceAccountTokenForCredentialProviders=true"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
   name: nsenter-actions
   labels:
     app: nsenter
 data:
-  pre-copy: |
-    #!/usr/bin/env bash
-    set -xe
-    # This runs BEFORE nsenter, copy ConfigMaps to a different hostmount
-    echo "Copying configuration files..."
-    mkdir -p /host-configs
-    cp /configs/credential-provider-config.yaml /host-configs/
-    cp /configs-systemd/20-credential-provider.conf /host-configs/
-    cp /configs-default/kubelet-extra-args /host-configs/
-    echo "Files copied to /opt/credential-configs on host"
-  
   setup-credential-provider: |
     #!/usr/bin/env bash
     set -xe
+
+    echo "=========================================="
+    echo "Credential Provider Setup Script"
+    echo "=========================================="
+    echo ""
 
     # Check if already configured
     if [[ -f /opt/credential-provider-configured ]]; then
@@ -73,11 +22,7 @@ data:
       exit 0
     fi
 
-    # Create directories
-    mkdir -p /etc/kubernetes/credential-provider
-    mkdir -p /opt
-
-    # Download the Azure ACR credential provider binary based on architecture
+    # Detect architecture
     ARCH=$(uname -m)
     echo "Detected architecture: ${ARCH}"
     
@@ -89,37 +34,87 @@ data:
       echo "ERROR: Unsupported architecture: ${ARCH}"
       exit 1
     fi
-    
-    echo "Downloading Azure ACR credential provider for ${BINARY_ARCH}..."
-    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/master/bin/${BINARY_ARCH}/azure-acr-credential-provider \
-      -o /opt/azure-acr-credential-provider
-    
-    chmod +x /opt/azure-acr-credential-provider
+    echo ""
 
-    # Copy credential provider config from separate hostmount (pre-copied by initContainer)
-    echo "Installing credential provider configuration..."
-    cp /opt/credential-configs/credential-provider-config.yaml /etc/kubernetes/credential-provider/credential-provider-config.yaml
+    # Create directories
+    echo "Creating directories..."
+    mkdir -p /etc/kubernetes/credential-provider
+    mkdir -p /opt
+    echo "✓ Created directory: /etc/kubernetes/credential-provider"
+    echo "✓ Created directory: /opt"
+    echo ""
+
+    # Download the Azure ACR credential provider binary
+    echo "Downloading Azure ACR credential provider for ${BINARY_ARCH}..."
+    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/master/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
+      -o /opt/azure-acr-credential-provider
+    chmod +x /opt/azure-acr-credential-provider
+    echo "✓ Downloaded and installed to: /opt/azure-acr-credential-provider"
+    echo ""
+
+    # Generate credential provider configuration
+    echo "Generating credential provider configuration..."
+    CRED_CONFIG_FILE="/etc/kubernetes/credential-provider/credential-provider-config.yaml"
+    
+    # Create the credential provider config directly with printf
+    printf '%s\n' \
+      'apiVersion: kubelet.config.k8s.io/v1' \
+      'kind: CredentialProviderConfig' \
+      'providers:' \
+      '- name: acr-credential-provider' \
+      '  matchImages:' \
+      '  - "*.azurecr.io"' \
+      '  - "*.azurecr.cn"' \
+      '  - "*.azurecr.de"' \
+      '  - "*.azurecr.us"' \
+      '  defaultCacheDuration: "10m"' \
+      '  apiVersion: credentialprovider.kubelet.k8s.io/v1' \
+      '  exec:' \
+      '    command: /opt/azure-acr-credential-provider' \
+      '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
+      > "${CRED_CONFIG_FILE}"
+    
+    echo "Generated credential provider config:"
+    cat "${CRED_CONFIG_FILE}"
+    echo ""
 
     # Update kubelet configuration in /etc/default/kubelet
     KUBELET_CONFIG_FILE="/etc/default/kubelet"
+    
+    echo "=========================================="
+    echo "KUBELET CONFIGURATION ANALYSIS"
+    echo "=========================================="
+    echo ""
+    
+    # Show original kubelet configuration
+    echo "=== ORIGINAL KUBELET CONFIGURATION ==="
+    if [[ -f "${KUBELET_CONFIG_FILE}" ]]; then
+      cat "${KUBELET_CONFIG_FILE}"
+    else
+      echo "ERROR: ${KUBELET_CONFIG_FILE} not found!"
+      exit 1
+    fi
+    echo ""
+    echo "=========================================="
+    echo ""
     
     # Backup original kubelet config
     if [[ ! -f "${KUBELET_CONFIG_FILE}.bak" ]]; then
       cp "${KUBELET_CONFIG_FILE}" "${KUBELET_CONFIG_FILE}.bak"
       echo "Created backup at ${KUBELET_CONFIG_FILE}.bak"
+    else
+      echo "Backup already exists at ${KUBELET_CONFIG_FILE}.bak"
     fi
+    echo ""
 
     # Check if already configured with our custom paths
     if ! grep -q "image-credential-provider-config=/etc/kubernetes/credential-provider/credential-provider-config.yaml" "${KUBELET_CONFIG_FILE}"; then
       echo "Updating credential provider configuration in KUBELET_FLAGS..."
+      echo ""
       
       # Create a temporary file for modifications
       TEMP_FILE=$(mktemp)
       cp "${KUBELET_CONFIG_FILE}" "${TEMP_FILE}"
-      
-      echo "=== ORIGINAL CONFIG ==="
-      cat "${KUBELET_CONFIG_FILE}"
-      echo ""
       
       # Replace the default AKS credential provider paths with our custom ones
       sed -i 's|--image-credential-provider-bin-dir=/var/lib/kubelet/credential-provider|--image-credential-provider-bin-dir=/opt|g' "${TEMP_FILE}"
@@ -139,9 +134,19 @@ data:
           sed -i 's|\(KUBELET_FLAGS=.*\)|\1 --feature-gates=KubeletServiceAccountTokenForCredentialProviders=true|' "${TEMP_FILE}"
         fi
       fi
+      echo ""
       
-      echo "=== PROPOSED CHANGES ==="
+      echo "=== UPDATED KUBELET CONFIGURATION ==="
       cat "${TEMP_FILE}"
+      echo ""
+      echo "=========================================="
+      echo ""
+      
+      # Show diff between original and updated
+      echo "=== CONFIGURATION DIFF ==="
+      diff -u "${KUBELET_CONFIG_FILE}" "${TEMP_FILE}" || true
+      echo ""
+      echo "=========================================="
       echo ""
       
       # Validate the modified file has required content
@@ -214,32 +219,74 @@ data:
       
       echo ""
       echo "=== ALL VALIDATION CHECKS PASSED ==="
+      echo ""
+      
+      # Apply configuration
       echo "Applying configuration..."
       cp "${TEMP_FILE}" "${KUBELET_CONFIG_FILE}"
       rm "${TEMP_FILE}"
+      echo "Configuration applied successfully"
     else
-      echo "Credential provider already configured with custom paths"
+      echo "=========================================="
+      echo "CONFIGURATION STATUS: ALREADY CONFIGURED"
+      echo "=========================================="
+      echo ""
+      echo "✓ Credential provider is already configured with custom paths"
+      echo "✓ No changes needed"
+      echo ""
+      echo "Current configuration detected:"
+      echo "  • Config path: /etc/kubernetes/credential-provider/credential-provider-config.yaml"
+      echo "  • Binary dir: /opt"
+      echo ""
+      echo "=========================================="
+      exit 0
     fi
+    echo ""
 
     # Mark as configured
     touch /opt/credential-provider-configured
+    echo "Created sentinel file: /opt/credential-provider-configured"
+    echo ""
 
     # Restart kubelet to apply changes
     echo "Restarting kubelet..."
     systemctl restart kubelet
     
     # Wait a bit and check if kubelet is running
+    echo "Waiting 5 seconds for kubelet to start..."
     sleep 5
+    
     if systemctl is-active --quiet kubelet; then
-      echo "Kubelet restarted successfully"
+      echo "✓ Kubelet restarted successfully"
+      echo ""
+      echo "=== KUBELET STATUS ==="
+      systemctl status kubelet --no-pager -l || true
     else
-      echo "ERROR: Kubelet failed to restart! Restoring backup..."
-      cp "${KUBELET_CONFIG_FILE}.bak" "${KUBELET_CONFIG_FILE}"
-      systemctl restart kubelet
-      exit 1
+      echo "✗ ERROR: Kubelet failed to restart!"
+      echo ""
+      echo "=== KUBELET SERVICE STATUS ==="
+      systemctl status kubelet --no-pager -l || true
+      echo ""
+      echo "=== KUBELET SERVICE LOGS ==="
+      journalctl -u kubelet --no-pager -l --since="1 minute ago" || true
+      echo ""
+      echo "=== FAILED CONFIGURATION ==="
+      cat "${KUBELET_CONFIG_FILE}"
+      echo ""
+      echo "This is a critical failure. The kubelet configuration is invalid."
+      echo "Manual intervention may be required."
     fi
+    echo ""
 
-    echo "Credential provider setup completed successfully"
+    # Mark as configured
+    touch /opt/credential-provider-configured
+    echo "Created sentinel file: /opt/credential-provider-configured"
+    echo ""
+
+    echo "=========================================="
+    echo "✓ Credential provider setup completed successfully"
+    echo "=========================================="
+    echo ""
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -258,38 +305,17 @@ spec:
     spec:
       hostNetwork: true
       hostPID: true
-      initContainers:
-      - name: copy-configs
-        image: busybox:latest
-        command: ["/bin/sh", "/scripts/pre-copy"]
-        volumeMounts:
-        - name: actions
-          mountPath: "/scripts"
-        - name: host-configs
-          mountPath: "/host-configs"
-        - name: credential-config
-          mountPath: "/configs"
-          readOnly: true
-        - name: kubelet-systemd-config
-          mountPath: "/configs-systemd"
-          readOnly: true
-        - name: kubelet-default-config
-          mountPath: "/configs-default"
-          readOnly: true
       containers:
-      - image: alpine:latest
+      - image: docker.io/alexeldeib/nsenter:latest
         imagePullPolicy: Always
         name: *name
-        command: ["/bin/sh"]
+        command: ["/bin/bash", "-c"]
         args:
-        - -c
-        - |
-          set -e
-          echo "Installing nsenter..."
-          apk add --no-cache util-linux bash curl
-          echo "Entering host namespaces and running setup script..."
-          nsenter --mount=/proc/1/ns/mnt --uts=/proc/1/ns/uts --ipc=/proc/1/ns/ipc --net=/proc/1/ns/net --pid=/proc/1/ns/pid -- \
-            bash /opt/actions/setup-credential-provider
+          - |
+            # Copy action to mnt/actions which is mounted to host
+            cp -R /opt/actions/. /mnt/actions/
+            # Execute via nsenter using the host path
+            nsenter -t 1 -m -u -i -n -p bash /tmp/nsenter-actions/setup-credential-provider
         resources:
           requests:
             cpu: 0.5
@@ -302,28 +328,14 @@ spec:
         volumeMounts:
         - name: actions
           mountPath: "/opt/actions"
-        - name: hostmount
+        - name: mnt-actions
           mountPath: "/mnt/actions"
-        - name: host-configs
-          mountPath: "/opt/credential-configs"
       volumes:
-      - name: hostmount
-        hostPath:
-          path: /opt/actions
-          type: DirectoryOrCreate
-      - name: host-configs
-        hostPath:
-          path: /opt/credential-configs
-          type: DirectoryOrCreate
       - name: actions
         configMap:
           name: nsenter-actions
-      - name: credential-config
-        configMap:
-          name: credential-provider-config
-      - name: kubelet-systemd-config
-        configMap:
-          name: kubelet-systemd-config
-      - name: kubelet-default-config
-        configMap:
-          name: kubelet-default-config
+          defaultMode: 0755
+      - name: mnt-actions
+        hostPath:
+          path: /tmp/nsenter-actions
+          type: DirectoryOrCreate
