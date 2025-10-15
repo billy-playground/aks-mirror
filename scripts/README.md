@@ -72,3 +72,19 @@ Manually runs the credential provider setup process:
 - **Rolls back automatically** if kubelet fails to restart
 
 Use this to test the setup process step-by-step outside of the DaemonSet. The script runs fully automated with automatic rollback on failure.
+
+### 6. `check-kubelet-config.sh` - Check Kubelet Configuration
+**Usage:** Run via `run-script-on-node.sh` (not directly)
+
+Displays comprehensive kubelet credential provider configuration:
+- **Kubelet configuration file location** and full content
+- **Credential provider binary directory** path
+- **Credential provider config file** path
+- **Feature gates** status (especially KubeletServiceAccountTokenForCredentialProviders)
+- **Binary existence check** (verifies credential provider binary)
+- **Config file content** (shows actual configuration)
+- **Kubelet service status**
+- **Configuration summary** (quick overview of setup state)
+
+Use this to quickly verify what paths and settings are currently configured on a node.
+```

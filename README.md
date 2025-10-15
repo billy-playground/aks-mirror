@@ -35,7 +35,13 @@ az aks create \
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 ```
 
-## Step 3: Retrieve the OIDC Issuer URL
+## Step 3: Configure Credential Provider on AKS Nodes
+
+```bash
+kubectl apply -f k8s-templates/configure-nodes.yaml
+```
+
+## Step 4: Retrieve the OIDC Issuer URL
 
 ```bash
 export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
@@ -44,7 +50,7 @@ export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
     --output tsv)"
 ```
 
-## Step 4: Create a Managed Identity
+## Step 5: Create a Managed Identity
 
 ```bash
 export SUBSCRIPTION="$(az account show --query id --output tsv)"
@@ -63,7 +69,7 @@ export USER_ASSIGNED_CLIENT_ID="$(az identity show \
     --output tsv)"
 ```
 
-## Step 5: Create a Kubernetes Service Account
+## Step 6: Create a Kubernetes Service Account
 
 ```bash
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
@@ -85,7 +91,7 @@ metadata:
 EOF
 ```
 
-## Step 6: Create the Federated Identity Credential
+## Step 7: Create the Federated Identity Credential
 
 ```bash
 export FEDERATED_IDENTITY_CREDENTIAL_NAME="myFedIdentity$RANDOM_ID"
@@ -99,7 +105,7 @@ az identity federated-credential create \
     --audience api://AzureADTokenExchange
 ```
 
-## Step 7: Create an Azure Container Registry (ACR)
+## Step 8: Create an Azure Container Registry (ACR)
 
 ```bash
 export ACR_NAME="acrmirror${RANDOM_ID}"
@@ -117,9 +123,44 @@ az acr cache create \
     --source-repo "mcr.microsoft.com/*" \
     --target-repo "*"
 
+
 # Assign AcrPull role to the managed identity
+# Use object ID (principalId) instead of client ID for role assignments
+export USER_ASSIGNED_OBJECT_ID="$(az identity show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
+    --query 'principalId' \
+    --output tsv)"
 az role assignment create \
-    --assignee "${USER_ASSIGNED_CLIENT_ID}" \
+    --assignee-object-id "${USER_ASSIGNED_OBJECT_ID}" \
+    --assignee-principal-type ServicePrincipal \
     --role AcrPull \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
+
+## Step 9: Deploy a Test Pod to Verify ACR Pull
+
+```bash
+# Deploy a test pod that pulls an image from ACR (via artifact cache)
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-acr-pull
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+  labels:
+    azure.workload.identity/use: "true"
+spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+  containers:
+  - name: hello-world
+    image: ${ACR_NAME}.azurecr.io/mcr/hello-world:latest
+  restartPolicy: Never
+EOF
+
+# Watch the pod status
+kubectl get pod test-acr-pull -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
+```
+
+If the pod reaches "Completed" status, your ACR credential provider setup is working correctly!
+
