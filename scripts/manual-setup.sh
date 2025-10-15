@@ -50,16 +50,13 @@ cat > "${CRED_CONFIG_FILE}" << 'EOF'
 apiVersion: kubelet.config.k8s.io/v1
 kind: CredentialProviderConfig
 providers:
-- name: acr-credential-provider
-  matchImages:
-  - "*.azurecr.io"
-  - "*.azurecr.cn"
-  - "*.azurecr.de"
-  - "*.azurecr.us"
-  defaultCacheDuration: "10m"
-  apiVersion: credentialprovider.kubelet.k8s.io/v1
-  exec:
-    command: /opt/azure-acr-credential-provider
+  - name: azure-acr-credential-provider
+    matchImages:
+      - "*.azurecr.io"
+      - "*.azurecr.cn"
+      - "*.azurecr.de"
+      - "*.azurecr.us"
+    defaultCacheDuration: "10m"
     apiVersion: credentialprovider.kubelet.k8s.io/v1
 EOF
 
