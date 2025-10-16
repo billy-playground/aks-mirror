@@ -289,7 +289,7 @@ data:
     echo "=========================================="
     echo ""
 
-    # Configure registry mirror for mcr.microsoft.com
+    # Configure default registry mirror to redirect all traffic through ACR
     echo "=========================================="
     echo "Registry Mirror Configuration"
     echo "=========================================="
@@ -298,10 +298,10 @@ data:
     # ACR name will be replaced by sed before applying the manifest
     ACR_NAME="{{ACR_NAME}}"
 
-    echo "Configuring registry mirror to redirect mcr.microsoft.com -> ${ACR_NAME}.azurecr.io"
+    echo "Configuring default registry mirror to use ${ACR_NAME}.azurecr.io"
     echo ""
 
-    MIRROR_CONFIG="/etc/containerd/certs.d/mcr.microsoft.com/hosts.toml"
+    MIRROR_CONFIG="/etc/containerd/certs.d/_default/hosts.toml"
 
     # Check if already configured
     if [[ -f "${MIRROR_CONFIG}" ]]; then
@@ -310,17 +310,17 @@ data:
       echo ""
     else
       # Create directory
-      echo "Creating directory: /etc/containerd/certs.d/mcr.microsoft.com"
-      mkdir -p /etc/containerd/certs.d/mcr.microsoft.com
+      echo "Creating directory: /etc/containerd/certs.d/_default"
+      mkdir -p /etc/containerd/certs.d/_default
       echo ""
 
-      # Create hosts.toml with mirror configuration
+      # Create hosts.toml with default mirror configuration
+      # Using _default will apply this to all registries
       echo "Creating mirror configuration..."
       printf '%s\n' \
-        'server = "https://mcr.microsoft.com"' \
-        '' \
-        "[host.\"https://${ACR_NAME}.azurecr.io\"]" \
+        '[host."https://'${ACR_NAME}'.azurecr.io"]' \
         '  capabilities = ["pull", "resolve"]' \
+        '  skip_verify = true' \
         > "${MIRROR_CONFIG}"
 
       echo "✓ Registry mirror configuration created:"
