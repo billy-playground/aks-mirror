@@ -214,7 +214,7 @@ spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
   - name: hello-world
-    image: mcr.microsoft.com/dotnet/core/samples:latest
+    image: mcr.microsoft.com/dotnet/samples:latest
   restartPolicy: Never
 EOF
 
