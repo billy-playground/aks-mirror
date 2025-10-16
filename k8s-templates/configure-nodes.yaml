@@ -69,6 +69,14 @@ data:
       '      - "*.azurecr.us"' \
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
+      '    tokenAttributes:' \
+      '      serviceAccountTokenAudience: api://AzureADTokenExchange' \
+      '      requireServiceAccount: true' \
+      '      requiredServiceAccountAnnotationKeys:' \
+      '      - kubernetes.azure.com/acr-client-id' \
+      '      - kubernetes.azure.com/acr-tenant-id' \
+      '    args:' \
+      '      - /etc/kubernetes/azure.json' \
       > "${CRED_CONFIG_FILE}"
     
     echo "Generated credential provider config:"

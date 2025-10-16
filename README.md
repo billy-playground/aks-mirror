@@ -78,25 +78,45 @@ export USER_ASSIGNED_CLIENT_ID="$(az identity show \
     --output tsv)"
 ```
 
-## Step 6: Create a Kubernetes Service Account
+## Step 6: Create Service Account and RBAC Configuration
 
 ```bash
-az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
-
 export SERVICE_ACCOUNT_NAMESPACE="default"
 export SERVICE_ACCOUNT_NAME="workload-identity-sa$RANDOM_ID"
 export TENANT_ID="$(az account show --query tenantId --output tsv)"
 
+# Create service account with ACR annotations
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
   annotations:
-    azure.workload.identity/client-id: "${USER_ASSIGNED_CLIENT_ID}"
     kubernetes.azure.com/acr-client-id: "${USER_ASSIGNED_CLIENT_ID}"
     kubernetes.azure.com/acr-tenant-id: "${TENANT_ID}"
-  name: "${SERVICE_ACCOUNT_NAME}"
-  namespace: "${SERVICE_ACCOUNT_NAMESPACE}"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubelet-serviceaccount-reader
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubelet-serviceaccount-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubelet-serviceaccount-reader
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes
 EOF
 ```
 
