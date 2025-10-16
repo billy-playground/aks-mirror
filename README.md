@@ -197,6 +197,33 @@ kubectl get pod test-acr-pull -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
 
 If the pod reaches "Completed" status, your ACR credential provider setup is working correctly!
 
+## Step 10: Test Registry Mirror with MCR Image
+
+```bash
+# Deploy a test pod that pulls directly from mcr.microsoft.com
+# The registry mirror will transparently redirect to your ACR
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-mcr-mirror
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+  labels:
+    azure.workload.identity/use: "true"
+spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+  containers:
+  - name: hello-world
+    image: mcr.microsoft.com/dotnet/core/samples:latest
+  restartPolicy: Never
+EOF
+
+# Watch the pod status
+kubectl get pod test-mcr-mirror -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
+```
+
+If the pod reaches "Completed" status, your registry mirror is working correctly and MCR images are being served through your ACR!
+
 ## Cleanup
 
 To remove all resources created in this demo:
