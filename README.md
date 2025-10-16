@@ -8,21 +8,18 @@ This guide demonstrates how to configure Azure Kubernetes Service (AKS) to pull 
 - kubectl installed
 - An active Azure subscription
 
-## Step 1: Create a Resource Group
+## Step 1: Create Resource Group and AKS Cluster
 
 ```bash
 export RANDOM_ID="$(openssl rand -hex 3)"
 export RESOURCE_GROUP="rg-aks-mirror-demo-$RANDOM_ID"
 export LOCATION="southeastasia"
-
-az group create --name "${RESOURCE_GROUP}" --location "${LOCATION}"
-```
-
-## Step 2: Create an AKS Cluster
-
-```bash
 export CLUSTER_NAME="cluster-aks-mirror-demo-$RANDOM_ID"
 
+# Create resource group
+az group create --name "${RESOURCE_GROUP}" --location "${LOCATION}"
+
+# Create AKS cluster with workload identity enabled
 az aks create \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${CLUSTER_NAME}" \
@@ -32,10 +29,12 @@ az aks create \
     --enable-workload-identity \
     --node-vm-size "Standard_D2s_v5" \
     --generate-ssh-keys
+
+# Get cluster credentials
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 ```
 
-## Step 3: Retrieve the OIDC Issuer URL
+## Step 2: Retrieve the OIDC Issuer URL
 
 ```bash
 export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
@@ -44,7 +43,7 @@ export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
     --output tsv)"
 ```
 
-## Step 4: Create a Managed Identity
+## Step 3: Create a Managed Identity
 
 ```bash
 export SUBSCRIPTION="$(az account show --query id --output tsv)"
@@ -63,7 +62,7 @@ export USER_ASSIGNED_CLIENT_ID="$(az identity show \
     --output tsv)"
 ```
 
-## Step 5: Create Service Account and RBAC Configuration
+## Step 4: Create Service Account and RBAC Configuration
 
 ```bash
 export SERVICE_ACCOUNT_NAMESPACE="default"
@@ -105,7 +104,7 @@ subjects:
 EOF
 ```
 
-## Step 6: Create the Federated Identity Credential
+## Step 5: Create the Federated Identity Credential
 
 ```bash
 export FEDERATED_IDENTITY_CREDENTIAL_NAME="myFedIdentity$RANDOM_ID"
@@ -119,7 +118,7 @@ az identity federated-credential create \
     --audience api://AzureADTokenExchange
 ```
 
-## Step 7: Create an Azure Container Registry (ACR)
+## Step 6: Create an Azure Container Registry (ACR)
 
 ```bash
 export ACR_NAME="acrmirror${RANDOM_ID}"
@@ -152,7 +151,7 @@ az role assignment create \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
 
-## Step 8: Configure Credential Provider and Registry Mirror on AKS Nodes
+## Step 7: Configure Credential Provider and Registry Mirror on AKS Nodes
 
 ```bash
 # Apply the node configuration DaemonSet with ACR_NAME substitution
@@ -171,7 +170,7 @@ You can use the troubleshooting scripts to check the configuration status on eac
 ./scripts/get-nodes.sh ${CLUSTER_NAME} ${RESOURCE_GROUP}
 ```
 
-## Step 9: Deploy a Test Pod to Verify ACR Pull
+## Step 8: Deploy a Test Pod to Verify ACR Pull
 
 ```bash
 # Deploy a test pod that pulls an image from ACR (via artifact cache)
@@ -197,7 +196,7 @@ kubectl get pod test-acr-pull -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
 
 If the pod reaches "Completed" status, your ACR credential provider setup is working correctly!
 
-## Step 10: Test Registry Mirror with MCR Image
+## Step 9: Test Registry Mirror with MCR Image
 
 ```bash
 # Deploy a test pod that pulls directly from mcr.microsoft.com
