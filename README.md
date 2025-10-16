@@ -1,6 +1,6 @@
-# AKS Workload Identity Setup Guide
+# AKS ACR Integration with Secretless Authentication
 
-This guide walks you through setting up workload identity on your Azure Kubernetes Service (AKS) cluster. Workload identity allows your Kubernetes workloads to securely access Azure resources using Azure Active Directory (Azure AD) without storing credentials in your code or configuration.
+This guide demonstrates how to configure Azure Kubernetes Service (AKS) to pull container images from Azure Container Registry (ACR) using **secretless authentication**. By leveraging workload identity and the Azure ACR credential provider, your Kubernetes workloads can securely access ACR without storing any credentials, passwords, or service principal secrets in your cluster.
 
 ## Prerequisites
 
@@ -35,22 +35,7 @@ az aks create \
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 ```
 
-## Step 3: Configure Credential Provider on AKS Nodes
-
-```bash
-kubectl apply -f k8s-templates/configure-nodes.yaml
-```
-
-**Inspect the deployment:**
-
-You can use the troubleshooting scripts to check the configuration status on each node:
-
-```bash
-# Get node information and ready-to-use commands
-./scripts/get-nodes.sh ${CLUSTER_NAME} ${RESOURCE_GROUP}
-```
-
-## Step 4: Retrieve the OIDC Issuer URL
+## Step 3: Retrieve the OIDC Issuer URL
 
 ```bash
 export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
@@ -59,7 +44,7 @@ export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
     --output tsv)"
 ```
 
-## Step 5: Create a Managed Identity
+## Step 4: Create a Managed Identity
 
 ```bash
 export SUBSCRIPTION="$(az account show --query id --output tsv)"
@@ -78,7 +63,7 @@ export USER_ASSIGNED_CLIENT_ID="$(az identity show \
     --output tsv)"
 ```
 
-## Step 6: Create Service Account and RBAC Configuration
+## Step 5: Create Service Account and RBAC Configuration
 
 ```bash
 export SERVICE_ACCOUNT_NAMESPACE="default"
@@ -120,7 +105,7 @@ subjects:
 EOF
 ```
 
-## Step 7: Create the Federated Identity Credential
+## Step 6: Create the Federated Identity Credential
 
 ```bash
 export FEDERATED_IDENTITY_CREDENTIAL_NAME="myFedIdentity$RANDOM_ID"
@@ -134,7 +119,7 @@ az identity federated-credential create \
     --audience api://AzureADTokenExchange
 ```
 
-## Step 8: Create an Azure Container Registry (ACR)
+## Step 7: Create an Azure Container Registry (ACR)
 
 ```bash
 export ACR_NAME="acrmirror${RANDOM_ID}"
@@ -167,6 +152,35 @@ az role assignment create \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
 
+## Step 8: Configure Credential Provider and Registry Mirror on AKS Nodes
+
+This step configures all AKS nodes with:
+- Azure ACR credential provider for secretless authentication
+- Registry mirror to redirect `mcr.microsoft.com` requests to your ACR
+
+```bash
+# Apply the node configuration DaemonSet with ACR_NAME substitution
+sed "s/{{ACR_NAME}}/${ACR_NAME}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
+
+# Wait for DaemonSet to complete configuration on all nodes
+kubectl rollout status daemonset/configure-nodes -n kube-system --timeout=300s
+```
+
+**What this configures:**
+
+1. **Credential Provider**: Installs the Azure ACR credential provider binary and configures kubelet to use it for ACR authentication
+2. **Registry Mirror**: Configures containerd to automatically redirect image pulls from `mcr.microsoft.com` to `${ACR_NAME}.azurecr.io`
+3. **Transparent Caching**: All MCR images will be served from your ACR's artifact cache without changing image references
+
+**Inspect the deployment:**
+
+You can use the troubleshooting scripts to check the configuration status on each node:
+
+```bash
+# Get node information and ready-to-use commands
+./scripts/get-nodes.sh ${CLUSTER_NAME} ${RESOURCE_GROUP}
+```
+
 ## Step 9: Deploy a Test Pod to Verify ACR Pull
 
 ```bash
@@ -193,3 +207,10 @@ kubectl get pod test-acr-pull -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
 
 If the pod reaches "Completed" status, your ACR credential provider setup is working correctly!
 
+## Cleanup
+
+To remove all resources created in this demo:
+
+```bash
+az group delete --name "${RESOURCE_GROUP}" --yes --no-wait
+```

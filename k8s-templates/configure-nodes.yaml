@@ -17,8 +17,8 @@ data:
     echo ""
 
     # Check if already configured
-    if [[ -f /opt/credential-provider-configured ]]; then
-      echo "Credential provider already configured, exiting"
+    if [[ -f /opt/credential-provider-configured ]] && [[ -f /opt/registry-mirror-configured ]]; then
+      echo "Credential provider and registry mirror already configured, exiting"
       exit 0
     fi
 
@@ -283,7 +283,7 @@ data:
     fi
     echo ""
 
-    # Mark as configured
+    # Mark credential provider as configured
     touch /opt/credential-provider-configured
     echo "Created sentinel file: /opt/credential-provider-configured"
     echo ""
@@ -292,11 +292,76 @@ data:
     echo "✓ Credential provider setup completed successfully"
     echo "=========================================="
     echo ""
+
+    # Configure registry mirror for mcr.microsoft.com
+    echo "=========================================="
+    echo "Registry Mirror Configuration"
+    echo "=========================================="
+    echo ""
+
+    # ACR name will be replaced by sed before applying the manifest
+    ACR_NAME="{{ACR_NAME}}"
+
+    echo "Configuring registry mirror to redirect mcr.microsoft.com -> ${ACR_NAME}.azurecr.io"
+    echo ""
+
+    MIRROR_CONFIG="/etc/containerd/certs.d/mcr.microsoft.com/hosts.toml"
+
+    # Check if already configured
+    if [[ -f "${MIRROR_CONFIG}" ]]; then
+      echo "Registry mirror already configured at ${MIRROR_CONFIG}"
+      cat "${MIRROR_CONFIG}"
+      echo ""
+    else
+      # Create directory
+      echo "Creating directory: /etc/containerd/certs.d/mcr.microsoft.com"
+      mkdir -p /etc/containerd/certs.d/mcr.microsoft.com
+      echo ""
+
+      # Create hosts.toml with mirror configuration
+      echo "Creating mirror configuration..."
+      cat > "${MIRROR_CONFIG}" <<TOML
+server = "https://mcr.microsoft.com"
+
+[host."https://${ACR_NAME}.azurecr.io"]
+  capabilities = ["pull", "resolve"]
+TOML
+
+      echo "✓ Registry mirror configuration created:"
+      cat "${MIRROR_CONFIG}"
+      echo ""
+
+      # Restart containerd to apply changes
+      echo "Restarting containerd..."
+      systemctl restart containerd
+      
+      # Wait and check if containerd is running
+      echo "Waiting 5 seconds for containerd to start..."
+      sleep 5
+      
+      if systemctl is-active --quiet containerd; then
+        echo "✓ Containerd restarted successfully"
+      else
+        echo "✗ ERROR: Containerd failed to restart!"
+        systemctl status containerd --no-pager -l || true
+      fi
+      echo ""
+    fi
+
+    # Mark registry mirror as configured
+    touch /opt/registry-mirror-configured
+    echo "Created sentinel file: /opt/registry-mirror-configured"
+    echo ""
+
+    echo "=========================================="
+    echo "✓ All configurations completed successfully"
+    echo "=========================================="
+    echo ""
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: &name setup-credential-provider
+  name: &name configure-nodes
   labels:
     app: *name
 spec:
@@ -344,3 +409,6 @@ spec:
         hostPath:
           path: /tmp/nsenter-actions
           type: DirectoryOrCreate
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
