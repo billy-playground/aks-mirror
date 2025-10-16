@@ -41,6 +41,15 @@ az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GRO
 kubectl apply -f k8s-templates/configure-nodes.yaml
 ```
 
+**Inspect the deployment:**
+
+You can use the troubleshooting scripts to check the configuration status on each node:
+
+```bash
+# Get node information and ready-to-use commands
+./scripts/get-nodes.sh ${CLUSTER_NAME} ${RESOURCE_GROUP}
+```
+
 ## Step 4: Retrieve the OIDC Issuer URL
 
 ```bash
