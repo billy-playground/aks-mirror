@@ -4,6 +4,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: nsenter-actions
+  namespace: kube-system
   labels:
     app: nsenter
 data:
@@ -315,12 +316,12 @@ data:
 
       # Create hosts.toml with mirror configuration
       echo "Creating mirror configuration..."
-      cat > "${MIRROR_CONFIG}" <<TOML
-server = "https://mcr.microsoft.com"
-
-[host."https://${ACR_NAME}.azurecr.io"]
-  capabilities = ["pull", "resolve"]
-TOML
+      printf '%s\n' \
+        'server = "https://mcr.microsoft.com"' \
+        '' \
+        "[host.\"https://${ACR_NAME}.azurecr.io\"]" \
+        '  capabilities = ["pull", "resolve"]' \
+        > "${MIRROR_CONFIG}"
 
       echo "✓ Registry mirror configuration created:"
       cat "${MIRROR_CONFIG}"
@@ -357,6 +358,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: &name configure-nodes
+  namespace: kube-system
   labels:
     app: *name
 spec:
