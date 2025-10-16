@@ -17,7 +17,7 @@ data:
     echo ""
 
     # Check if already configured
-    if [[ -f /opt/credential-provider-configured ]] && [[ -f /opt/registry-mirror-configured ]]; then
+    if [[ -f /opt/credential-provider-configured ]]; then
       echo "Credential provider and registry mirror already configured, exiting"
       exit 0
     fi
@@ -283,11 +283,6 @@ data:
     fi
     echo ""
 
-    # Mark credential provider as configured
-    touch /opt/credential-provider-configured
-    echo "Created sentinel file: /opt/credential-provider-configured"
-    echo ""
-
     echo "=========================================="
     echo "✓ Credential provider setup completed successfully"
     echo "=========================================="
@@ -348,9 +343,9 @@ TOML
       echo ""
     fi
 
-    # Mark registry mirror as configured
-    touch /opt/registry-mirror-configured
-    echo "Created sentinel file: /opt/registry-mirror-configured"
+    # Mark as configured (at the very end after all configurations)
+    touch /opt/credential-provider-configured
+    echo "Created sentinel file: /opt/credential-provider-configured"
     echo ""
 
     echo "=========================================="

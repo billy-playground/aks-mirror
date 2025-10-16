@@ -154,10 +154,6 @@ az role assignment create \
 
 ## Step 8: Configure Credential Provider and Registry Mirror on AKS Nodes
 
-This step configures all AKS nodes with:
-- Azure ACR credential provider for secretless authentication
-- Registry mirror to redirect `mcr.microsoft.com` requests to your ACR
-
 ```bash
 # Apply the node configuration DaemonSet with ACR_NAME substitution
 sed "s/{{ACR_NAME}}/${ACR_NAME}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
@@ -165,12 +161,6 @@ sed "s/{{ACR_NAME}}/${ACR_NAME}/g" k8s-templates/configure-nodes.yaml | kubectl 
 # Wait for DaemonSet to complete configuration on all nodes
 kubectl rollout status daemonset/configure-nodes -n kube-system --timeout=300s
 ```
-
-**What this configures:**
-
-1. **Credential Provider**: Installs the Azure ACR credential provider binary and configures kubelet to use it for ACR authentication
-2. **Registry Mirror**: Configures containerd to automatically redirect image pulls from `mcr.microsoft.com` to `${ACR_NAME}.azurecr.io`
-3. **Transparent Caching**: All MCR images will be served from your ACR's artifact cache without changing image references
 
 **Inspect the deployment:**
 
