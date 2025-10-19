@@ -23,6 +23,9 @@ data:
       exit 0
     fi
 
+    # ACR host will be replaced by sed before applying the manifest
+    ACR_HOST="{{ACR_NAME}}.azurecr.io"
+    
     # Detect architecture
     ARCH=$(uname -m)
     echo "Detected architecture: ${ARCH}"
@@ -68,6 +71,7 @@ data:
       '      - "*.azurecr.cn"' \
       '      - "*.azurecr.de"' \
       '      - "*.azurecr.us"' \
+      '      - "mcr.microsoft.com"' \
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
       '    tokenAttributes:' \
@@ -78,6 +82,7 @@ data:
       '      - kubernetes.azure.com/acr-tenant-id' \
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
+      '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
       > "${CRED_CONFIG_FILE}"
     
     echo "Generated credential provider config:"
@@ -289,60 +294,62 @@ data:
     echo "=========================================="
     echo ""
 
-    # Configure default registry mirror to redirect all traffic through ACR
-    # COMMENTED OUT: Enable this section if you want to force all registry traffic through ACR
-    # echo "=========================================="
-    # echo "Registry Mirror Configuration"
-    # echo "=========================================="
-    # echo ""
-    #
-    # # ACR name will be replaced by sed before applying the manifest
-    # ACR_NAME="{{ACR_NAME}}"
-    #
-    # echo "Configuring default registry mirror to use ${ACR_NAME}.azurecr.io"
-    # echo ""
-    #
-    # MIRROR_CONFIG="/etc/containerd/certs.d/_default/hosts.toml"
-    #
-    # # Check if already configured
-    # if [[ -f "${MIRROR_CONFIG}" ]]; then
-    #   echo "Registry mirror already configured at ${MIRROR_CONFIG}"
-    #   cat "${MIRROR_CONFIG}"
-    #   echo ""
-    # else
-    #   # Create directory
-    #   echo "Creating directory: /etc/containerd/certs.d/_default"
-    #   mkdir -p /etc/containerd/certs.d/_default
-    #   echo ""
-    #
-    #   # Create hosts.toml with default mirror configuration
-    #   # Using _default will apply this to all registries
-    #   echo "Creating mirror configuration..."
-    #   printf '%s\n' \
-    #     '[host."https://'${ACR_NAME}'.azurecr.io"]' \
-    #     '  capabilities = ["pull", "resolve"]' \
-    #     > "${MIRROR_CONFIG}"
-    #
-    #   echo "✓ Registry mirror configuration created:"
-    #   cat "${MIRROR_CONFIG}"
-    #   echo ""
-    #
-    #   # Restart containerd to apply changes
-    #   echo "Restarting containerd..."
-    #   systemctl restart containerd
-    #   
-    #   # Wait and check if containerd is running
-    #   echo "Waiting 5 seconds for containerd to start..."
-    #   sleep 5
-    #   
-    #   if systemctl is-active --quiet containerd; then
-    #     echo "✓ Containerd restarted successfully"
-    #   else
-    #     echo "✗ ERROR: Containerd failed to restart!"
-    #     systemctl status containerd --no-pager -l || true
-    #   fi
-    #   echo ""
-    # fi
+    # Configure registry mirror to redirect MCR traffic through ACR
+    echo "=========================================="
+    echo "Registry Mirror Configuration"
+    echo "=========================================="
+    echo ""
+
+    MCR_REPOSITORY_BASE="mcr.microsoft.com"
+
+    echo "Configuring registry mirror for ${MCR_REPOSITORY_BASE} to use ${ACR_HOST}"
+    echo ""
+
+    MIRROR_CONFIG="/etc/containerd/certs.d/${MCR_REPOSITORY_BASE}/hosts.toml"
+
+    # Check if already configured
+    if [[ -f "${MIRROR_CONFIG}" ]]; then
+      echo "Registry mirror already configured at ${MIRROR_CONFIG}"
+      cat "${MIRROR_CONFIG}"
+      echo ""
+    else
+      # Create directory
+      echo "Creating directory: /etc/containerd/certs.d/${MCR_REPOSITORY_BASE}"
+      mkdir -p /etc/containerd/certs.d/${MCR_REPOSITORY_BASE}
+      echo ""
+
+      # Create hosts.toml with mirror configuration for MCR
+      # This redirects MCR traffic through ACR with override_path = true
+      echo "Creating mirror configuration..."
+      printf '%s\n' \
+        '[host."https://'${ACR_HOST}'/v2/"]' \
+        '  capabilities = ["pull", "resolve"]' \
+        '  override_path = true' \
+        > "${MIRROR_CONFIG}"
+
+      # Set proper permissions
+      chmod 0644 "${MIRROR_CONFIG}"
+
+      echo "✓ Registry mirror configuration created:"
+      cat "${MIRROR_CONFIG}"
+      echo ""
+
+      # Restart containerd to apply changes
+      echo "Restarting containerd..."
+      systemctl restart containerd
+      
+      # Wait and check if containerd is running
+      echo "Waiting 5 seconds for containerd to start..."
+      sleep 5
+      
+      if systemctl is-active --quiet containerd; then
+        echo "✓ Containerd restarted successfully"
+      else
+        echo "✗ ERROR: Containerd failed to restart!"
+        systemctl status containerd --no-pager -l || true
+      fi
+      echo ""
+    fi
 
     # Mark as configured (at the very end after all configurations)
     touch /opt/credential-provider-configured

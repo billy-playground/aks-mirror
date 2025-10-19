@@ -2,9 +2,22 @@
 
 # Manual setup script for testing credential provider configuration
 # This script replicates what the DaemonSet does but with more control
-# Usage: sudo bash manual-setup.sh
+# Usage: sudo bash manual-setup.sh <ACR_NAME>
 
 set -e
+
+# Check if ACR_NAME is provided
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <ACR_NAME>"
+    echo ""
+    echo "Example: $0 myacr"
+    echo ""
+    echo "This will configure the credential provider to use myacr.azurecr.io"
+    exit 1
+fi
+
+ACR_NAME="$1"
+ACR_HOST="${ACR_NAME}.azurecr.io"
 
 echo "========================================"
 echo "Manual Credential Provider Setup"
@@ -15,6 +28,9 @@ if [ "$EUID" -ne 0 ]; then
     echo "Error: This script must be run as root (use sudo)"
     exit 1
 fi
+
+echo "Using ACR: ${ACR_HOST}"
+echo ""
 
 # Detect architecture
 ARCH=$(uname -m)
@@ -46,19 +62,30 @@ echo ""
 echo "Step 3: Creating configuration..."
 CRED_CONFIG_FILE="/etc/kubernetes/credential-provider/credential-provider-config.yaml"
 
-cat > "${CRED_CONFIG_FILE}" << 'EOF'
-apiVersion: kubelet.config.k8s.io/v1
-kind: CredentialProviderConfig
-providers:
-  - name: azure-acr-credential-provider
-    matchImages:
-      - "*.azurecr.io"
-      - "*.azurecr.cn"
-      - "*.azurecr.de"
-      - "*.azurecr.us"
-    defaultCacheDuration: "10m"
-    apiVersion: credentialprovider.kubelet.k8s.io/v1
-EOF
+# Create the credential provider config directly with printf
+printf '%s\n' \
+  'apiVersion: kubelet.config.k8s.io/v1' \
+  'kind: CredentialProviderConfig' \
+  'providers:' \
+  '  - name: azure-acr-credential-provider' \
+  '    matchImages:' \
+  '      - "*.azurecr.io"' \
+  '      - "*.azurecr.cn"' \
+  '      - "*.azurecr.de"' \
+  '      - "*.azurecr.us"' \
+  '      - "mcr.microsoft.com"' \
+  '    defaultCacheDuration: "10m"' \
+  '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
+  '    tokenAttributes:' \
+  '      serviceAccountTokenAudience: api://AzureADTokenExchange' \
+  '      requireServiceAccount: true' \
+  '      requiredServiceAccountAnnotationKeys:' \
+  '      - kubernetes.azure.com/acr-client-id' \
+  '      - kubernetes.azure.com/acr-tenant-id' \
+  '    args:' \
+  '      - /etc/kubernetes/azure.json' \
+  '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
+  > "${CRED_CONFIG_FILE}"
 
 echo "✓ Created configuration file"
 echo "Configuration content:"
@@ -154,37 +181,84 @@ journalctl --vacuum-time=1s 2>/dev/null || true
 
 systemctl restart kubelet
 
-# echo "Waiting 10 seconds for kubelet to start..."
-# sleep 10
+echo "Waiting 5 seconds for kubelet to start..."
+sleep 5
 
-# # if systemctl is-active --quiet kubelet; then
-#     echo "✓ Kubelet restarted successfully"
-    
-#     # Mark as configured
-#     touch /opt/credential-provider-configured
-#     echo "✓ Created sentinel file"
-    
-#     echo ""
-#     echo "========================================"
-#     echo "✓ Setup completed successfully!"
-#     echo "========================================"
-    
-#     echo ""
-#     echo "Kubelet status:"
-#     systemctl status kubelet --no-pager -l | head -20
-    
-# else
-#     echo "✗ Kubelet failed to restart!"
-#     echo ""
-#     echo "Restoring backup configuration..."
-#     cp "${KUBELET_CONFIG_FILE}.bak" "${KUBELET_CONFIG_FILE}"
-#     systemctl restart kubelet
-    
-#     echo ""
-#     echo "Kubelet logs:"
-#     journalctl -u kubelet --no-pager -l --since="1 minute ago" | tail -20
-    
-#     echo ""
-#     echo "✗ Setup failed - configuration restored"
-#     exit 1
-# fi
+if systemctl is-active --quiet kubelet; then
+    echo "✓ Kubelet restarted successfully"
+else
+    echo "✗ Kubelet failed to restart!"
+    systemctl status kubelet --no-pager -l || true
+fi
+
+echo ""
+echo "========================================"
+echo "✓ Credential provider setup completed"
+echo "========================================"
+
+# Configure registry mirror to redirect MCR traffic through ACR
+echo ""
+echo "========================================"
+echo "Registry Mirror Configuration"
+echo "========================================"
+echo ""
+
+MCR_REPOSITORY_BASE="mcr.microsoft.com"
+
+echo "Configuring registry mirror for ${MCR_REPOSITORY_BASE} to use ${ACR_HOST}"
+echo ""
+
+MIRROR_CONFIG="/etc/containerd/certs.d/${MCR_REPOSITORY_BASE}/hosts.toml"
+
+# Check if already configured
+if [[ -f "${MIRROR_CONFIG}" ]]; then
+  echo "Registry mirror already configured at ${MIRROR_CONFIG}"
+  cat "${MIRROR_CONFIG}"
+  echo ""
+else
+  # Create directory
+  echo "Creating directory: /etc/containerd/certs.d/${MCR_REPOSITORY_BASE}"
+  mkdir -p /etc/containerd/certs.d/${MCR_REPOSITORY_BASE}
+  echo ""
+
+  # Create hosts.toml with mirror configuration for MCR
+  # This redirects MCR traffic through ACR with override_path = true
+  echo "Creating mirror configuration..."
+  printf '%s\n' \
+    '[host."https://'${ACR_HOST}'/v2/"]' \
+    '  capabilities = ["pull", "resolve"]' \
+    '  override_path = true' \
+    > "${MIRROR_CONFIG}"
+
+  # Set proper permissions
+  chmod 0644 "${MIRROR_CONFIG}"
+
+  echo "✓ Registry mirror configuration created:"
+  cat "${MIRROR_CONFIG}"
+  echo ""
+
+  # Restart containerd to apply changes
+  echo "Restarting containerd..."
+  systemctl restart containerd
+  
+  # Wait and check if containerd is running
+  echo "Waiting 5 seconds for containerd to start..."
+  sleep 5
+  
+  if systemctl is-active --quiet containerd; then
+    echo "✓ Containerd restarted successfully"
+  else
+    echo "✗ ERROR: Containerd failed to restart!"
+    systemctl status containerd --no-pager -l || true
+  fi
+  echo ""
+fi
+
+# Mark as configured (at the very end after all configurations)
+touch /opt/credential-provider-configured
+echo "Created sentinel file: /opt/credential-provider-configured"
+echo ""
+
+echo "========================================"
+echo "✓ All configurations completed successfully"
+echo "========================================"
