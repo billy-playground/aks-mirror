@@ -7,6 +7,22 @@ This guide demonstrates how to configure Azure Kubernetes Service (AKS) to pull 
 - Azure CLI installed and configured
 - kubectl installed
 - An active Azure subscription
+- AKS preview extension: `az extension add --name aks-preview`
+- Register the identity binding preview feature:
+  ```bash
+  az feature register \
+    --namespace Microsoft.ContainerService \
+    --name IdentityBindingPreview
+  
+  # Wait for registration to complete (this may take several minutes)
+  az feature show \
+    --namespace Microsoft.ContainerService \
+    --name IdentityBindingPreview \
+    --query properties.state -o tsv
+  
+  # Once registered, refresh the provider
+  az provider register --namespace Microsoft.ContainerService
+  ```
 
 ## Step 1: Create Resource Group, AKS Cluster, Managed Identity, and ACR
 
@@ -43,12 +59,6 @@ az identity create \
     --location "${LOCATION}" \
     --subscription "${SUBSCRIPTION}"
 
-export USER_ASSIGNED_CLIENT_ID="$(az identity show \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
-    --query 'clientId' \
-    --output tsv)"
-
 export USER_ASSIGNED_OBJECT_ID="$(az identity show \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${USER_ASSIGNED_IDENTITY_NAME}" \
@@ -80,10 +90,10 @@ az role assignment create \
 ## Step 2: Configure Workload Identity and Service Account
 
 ```bash
-# Get OIDC Issuer URL
-export AKS_OIDC_ISSUER="$(az aks show --name "${CLUSTER_NAME}" \
+export USER_ASSIGNED_CLIENT_ID="$(az identity show \
     --resource-group "${RESOURCE_GROUP}" \
-    --query "oidcIssuerProfile.issuerUrl" \
+    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
+    --query 'clientId' \
     --output tsv)"
 
 # Set up service account variables
@@ -125,14 +135,53 @@ subjects:
   name: system:nodes
 EOF
 
-# Create federated identity credential
+# Get the managed identity resource ID
+export USER_ASSIGNED_IDENTITY_RESOURCE_ID=$(az identity show --resource-group "${RESOURCE_GROUP}" --name "${USER_ASSIGNED_IDENTITY_NAME}" --query id -o tsv)
+
+# Create identity binding and extract issuer URL using Azure CLI native query
+# Note: identity binding name must be lowercase letters, numbers, and hyphens only
+export AKS_ISSUER=$(az aks identity-binding create \
+    --resource-group "${RESOURCE_GROUP}" \
+    --cluster-name "${CLUSTER_NAME}" \
+    --name "my-identity-binding-$RANDOM_ID" \
+    --managed-identity-resource-id "${USER_ASSIGNED_IDENTITY_RESOURCE_ID}" \
+    --query 'properties.oidcIssuer.oidcIssuerUrl' \
+    --output tsv)
+
+# Create ClusterRole and ClusterRoleBinding to authorize the service account to use the managed identity
+# This is required for the projected token to use the identity binding issuer
+cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: allow-managed-identity-${RANDOM_ID}
+rules:
+- verbs: ["use-managed-identity"]
+  apiGroups: ["cid.wi.aks.azure.com"]
+  resources: ["${USER_ASSIGNED_CLIENT_ID}"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: allow-managed-identity-binding-${RANDOM_ID}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: allow-managed-identity-${RANDOM_ID}
+subjects:
+- kind: ServiceAccount
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+EOF
+
+# Create federated identity credential using the issuer from identity binding
 export FEDERATED_IDENTITY_CREDENTIAL_NAME="myFedIdentity$RANDOM_ID"
 
 az identity federated-credential create \
     --name "${FEDERATED_IDENTITY_CREDENTIAL_NAME}" \
     --identity-name "${USER_ASSIGNED_IDENTITY_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
-    --issuer "${AKS_OIDC_ISSUER}" \
+    --issuer "${AKS_ISSUER}" \
     --subject system:serviceaccount:"${SERVICE_ACCOUNT_NAMESPACE}":"${SERVICE_ACCOUNT_NAME}" \
     --audience api://AzureADTokenExchange
 ```
