@@ -23,8 +23,9 @@ data:
       exit 0
     fi
 
-    # ACR host will be replaced by sed before applying the manifest
+    # ACR host and SNI name will be replaced by sed before applying the manifest
     ACR_HOST="{{ACR_NAME}}.azurecr.io"
+    SNI_NAME="{{SNI_NAME}}"
     
     # Detect architecture
     ARCH=$(uname -m)
@@ -75,7 +76,7 @@ data:
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
       '    tokenAttributes:' \
-      '      serviceAccountTokenAudience: api://AzureADTokenExchange' \
+      '      serviceAccountTokenAudience: api://AKSIdentityBinding' \
       '      requireServiceAccount: true' \
       '      requiredServiceAccountAnnotationKeys:' \
       '      - kubernetes.azure.com/acr-client-id' \
@@ -83,6 +84,7 @@ data:
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
+      '      - --sni-name='${SNI_NAME} \
       > "${CRED_CONFIG_FILE}"
     
     echo "Generated credential provider config:"
