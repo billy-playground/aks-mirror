@@ -78,9 +78,9 @@ data:
       '    tokenAttributes:' \
       '      serviceAccountTokenAudience: api://AKSIdentityBinding' \
       '      requireServiceAccount: true' \
-      '      requiredServiceAccountAnnotationKeys:' \
-      '      - kubernetes.azure.com/acr-client-id' \
-      '      - kubernetes.azure.com/acr-tenant-id' \
+      '      optionalServiceAccountAnnotationKeys:' \
+      '      - azure.workload.identity/client-id' \
+      '      - azure.workload.identity/tenant-id' \
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
