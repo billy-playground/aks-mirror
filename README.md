@@ -1,6 +1,15 @@
-# AKS ACR Integration with Secretless Authentication
+# AKS ACR Integration with Secretless Authentication Using Identity Bindings
 
-This guide demonstrates how to configure Azure Kubernetes Service (AKS) to pull container images from Azure Container Registry (ACR) using **secretless authentication**. By leveraging workload identity and the Azure ACR credential provider, your Kubernetes workloads can securely access ACR without storing any credentials, passwords, or service principal secrets in your cluster.
+This guide demonstrates how to configure Azure Kubernetes Service (AKS) to pull container images from Azure Container Registry (ACR) using **secretless authentication** with **Identity Bindings**. By leveraging identity bindings and the Azure ACR credential provider, your Kubernetes workloads can securely access ACR without storing any credentials, passwords, or service principal secrets in your cluster.
+
+**What are Identity Bindings?**
+
+Identity Bindings is a preview feature in AKS that simplifies workload identity configuration by:
+
+- Automatically creating federated credentials between your service accounts and Azure managed identities
+- Eliminating manual federated credential creation steps
+- Providing a streamlined OIDC issuer configuration
+- Simplifying the authentication flow for both pods and kubelet credential providers
 
 ## Prerequisites
 
@@ -236,6 +245,8 @@ metadata:
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
   labels:
     azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
@@ -263,6 +274,8 @@ metadata:
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
   labels:
     azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
