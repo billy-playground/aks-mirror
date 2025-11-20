@@ -51,7 +51,7 @@ data:
 
     # Download the Azure ACR credential provider binary
     echo "Downloading Azure ACR credential provider for ${BINARY_ARCH}..."
-    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/master/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
+    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/qweeah/integrate-identity-binding/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
       -o /opt/azure-acr-credential-provider
     chmod +x /opt/azure-acr-credential-provider
     echo "✓ Downloaded and installed to: /opt/azure-acr-credential-provider"
