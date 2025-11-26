@@ -120,34 +120,34 @@ export TENANT_ID="$(az account show --query tenantId --output tsv)"
 
 # Create service account with workload identity annotations, plus RBAC configuration
 cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ${SERVICE_ACCOUNT_NAME}
-  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kubelet-serviceaccount-reader
-rules:
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubelet-serviceaccount-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubelet-serviceaccount-reader
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: system:nodes
----
+# apiVersion: v1
+# kind: ServiceAccount
+# metadata:
+#   name: ${SERVICE_ACCOUNT_NAME}
+#   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRole
+# metadata:
+#   name: kubelet-serviceaccount-reader
+# rules:
+# - apiGroups: [""]
+#   resources: ["serviceaccounts"]
+#   verbs: ["get"]
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: kubelet-serviceaccount-reader
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: ClusterRole
+#   name: kubelet-serviceaccount-reader
+# subjects:
+# - apiGroup: rbac.authorization.k8s.io
+#   kind: Group
+#   name: system:nodes
+# ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -252,10 +252,6 @@ kind: Pod
 metadata:
   name: test-acr-pull
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-  labels:
-    azure.workload.identity/use: "true"
-  annotations:
-    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
