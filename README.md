@@ -42,7 +42,6 @@ export RESOURCE_GROUP="rg-aks-mirror-demo-$RANDOM_ID"
 export LOCATION="southeastasia"
 export CLUSTER_NAME="cluster-aks-mirror-demo-$RANDOM_ID"
 export SUBSCRIPTION="$(az account show --query id --output tsv)"
-export USER_ASSIGNED_IDENTITY_NAME="mi-aks-mirror-demo-$RANDOM_ID"
 export ACR_NAME="acrmirror${RANDOM_ID}"
 
 # Create resource group
@@ -62,17 +61,23 @@ az aks create \
 # Get cluster credentials
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 
-# Create managed identity
-az identity create \
-    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
+# Get the kubelet identity from the cluster
+export KUBELET_IDENTITY_CLIENT_ID="$(az aks show \
     --resource-group "${RESOURCE_GROUP}" \
-    --location "${LOCATION}" \
-    --subscription "${SUBSCRIPTION}"
+    --name "${CLUSTER_NAME}" \
+    --query 'identityProfile.kubeletidentity.clientId' \
+    --output tsv)"
 
-export USER_ASSIGNED_OBJECT_ID="$(az identity show \
+export KUBELET_IDENTITY_OBJECT_ID="$(az aks show \
     --resource-group "${RESOURCE_GROUP}" \
-    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
-    --query 'principalId' \
+    --name "${CLUSTER_NAME}" \
+    --query 'identityProfile.kubeletidentity.objectId' \
+    --output tsv)"
+
+export KUBELET_IDENTITY_RESOURCE_ID="$(az aks show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CLUSTER_NAME}" \
+    --query 'identityProfile.kubeletidentity.resourceId' \
     --output tsv)"
 
 # Create Azure Container Registry
@@ -89,9 +94,9 @@ az acr cache create \
     --source-repo "mcr.microsoft.com/*" \
     --target-repo "*"
 
-# Assign AcrPull role to the managed identity
+# Assign AcrPull role to the kubelet identity
 az role assignment create \
-    --assignee-object-id "${USER_ASSIGNED_OBJECT_ID}" \
+    --assignee-object-id "${KUBELET_IDENTITY_OBJECT_ID}" \
     --assignee-principal-type ServicePrincipal \
     --role AcrPull \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
@@ -100,23 +105,13 @@ az role assignment create \
 ## Step 2: Configure Identity Binding and Service Account
 
 ```bash
-# Get the managed identity resource ID and create identity binding
-export USER_ASSIGNED_IDENTITY_RESOURCE_ID=$(az identity show --resource-group "${RESOURCE_GROUP}" --name "${USER_ASSIGNED_IDENTITY_NAME}" --query id -o tsv)
-
-# Create identity binding (replaces manual federated credential creation)
+# Create identity binding for kubelet identity (replaces manual federated credential creation)
 # Note: identity binding name must be lowercase letters, numbers, and hyphens only
 az aks identity-binding create \
     --resource-group "${RESOURCE_GROUP}" \
     --cluster-name "${CLUSTER_NAME}" \
-    --name "my-identity-binding-$RANDOM_ID" \
-    --managed-identity-resource-id "${USER_ASSIGNED_IDENTITY_RESOURCE_ID}"
-
-# Get the kubelet identity client ID from the cluster
-export KUBELET_IDENTITY_CLIENT_ID="$(az aks show \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${CLUSTER_NAME}" \
-    --query 'identityProfile.kubeletidentity.clientId' \
-    --output tsv)"
+    --name "kubelet-identity-binding-$RANDOM_ID" \
+    --managed-identity-resource-id "${KUBELET_IDENTITY_RESOURCE_ID}"
 
 # Set up service account variables
 export SERVICE_ACCOUNT_NAMESPACE="default"
