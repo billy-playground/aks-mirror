@@ -111,12 +111,12 @@ az aks identity-binding create \
     --name "my-identity-binding-$RANDOM_ID" \
     --managed-identity-resource-id "${USER_ASSIGNED_IDENTITY_RESOURCE_ID}"
 
-export USER_ASSIGNED_CLIENT_ID="$(az identity show \
+# Get the kubelet identity client ID from the cluster
+export KUBELET_IDENTITY_CLIENT_ID="$(az aks show \
     --resource-group "${RESOURCE_GROUP}" \
-    --name "${USER_ASSIGNED_IDENTITY_NAME}" \
-    --query 'clientId' \
+    --name "${CLUSTER_NAME}" \
+    --query 'identityProfile.kubeletidentity.clientId' \
     --output tsv)"
-
 
 # Set up service account variables
 export SERVICE_ACCOUNT_NAMESPACE="default"
@@ -130,53 +130,53 @@ kind: ServiceAccount
 metadata:
   name: ${SERVICE_ACCOUNT_NAME}
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-  annotations:
-    azure.workload.identity/client-id: "${USER_ASSIGNED_CLIENT_ID}"
-    azure.workload.identity/tenant-id: "${TENANT_ID}"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubelet-serviceaccount-reader
-rules:
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubelet-serviceaccount-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubelet-serviceaccount-reader
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: system:nodes
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: use-mi-${USER_ASSIGNED_CLIENT_ID}
+  name: use-kubelet-identity
 rules:
 - verbs: ["use-managed-identity"]
   apiGroups: ["cid.wi.aks.azure.com"]
-  resources: ["${USER_ASSIGNED_CLIENT_ID}"]
+  resources: ["${KUBELET_IDENTITY_CLIENT_ID}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: use-mi-${USER_ASSIGNED_CLIENT_ID}
+  name: use-kubelet-identity
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: use-mi-${USER_ASSIGNED_CLIENT_ID}
+  name: use-kubelet-identity
 subjects:
-- kind: ServiceAccount
-  name: ${SERVICE_ACCOUNT_NAME}
-  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+- kind: Group
+  name: system:serviceaccounts
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+# Create ClusterRole for requesting service account tokens with custom audiences
+cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: request-sa-token-audience
+rules:
+- verbs: ["request-serviceaccounts-token-audience"]
+  apiGroups: [""]
+  resources: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: request-sa-token-audience
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: request-sa-token-audience
+subjects:
+- kind: Group
+  name: system:serviceaccounts
+  apiGroup: rbac.authorization.k8s.io
 EOF
 ```
 
@@ -190,10 +190,6 @@ kind: Pod
 metadata:
   name: test-shell
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-  labels:
-    azure.workload.identity/use: "true"
-  annotations:
-    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
@@ -217,8 +213,8 @@ fi
 
 echo "Detected SNI_NAME: ${SNI_NAME}"
 
-# Apply the node configuration DaemonSet with ACR_NAME and SNI_NAME substitution
-sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
+# Apply the node configuration DaemonSet with ACR_NAME, SNI_NAME, and DEFAULT_CLIENT_ID substitution
+sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" -e "s/{{DEFAULT_CLIENT_ID}}/${KUBELET_IDENTITY_CLIENT_ID}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
 
 # Wait for DaemonSet to complete configuration on all nodes
 kubectl rollout status daemonset/configure-nodes -n kube-system --timeout=300s
