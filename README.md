@@ -118,52 +118,23 @@ export SERVICE_ACCOUNT_NAMESPACE="default"
 export SERVICE_ACCOUNT_NAME="workload-identity-sa$RANDOM_ID"
 export TENANT_ID="$(az account show --query tenantId --output tsv)"
 
-# Create service account with workload identity annotations, plus RBAC configuration
+# Create Service Account with workload identity annotation. TODO: move to overlaymgr
 cat <<EOF | kubectl apply -f -
-# apiVersion: v1
-# kind: ServiceAccount
-# metadata:
-#   name: ${SERVICE_ACCOUNT_NAME}
-#   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-# ---
-# apiVersion: rbac.authorization.k8s.io/v1
-# kind: ClusterRole
-# metadata:
-#   name: kubelet-serviceaccount-reader
-# rules:
-# - apiGroups: [""]
-#   resources: ["serviceaccounts"]
-#   verbs: ["get"]
-# ---
-# apiVersion: rbac.authorization.k8s.io/v1
-# kind: ClusterRoleBinding
-# metadata:
-#   name: kubelet-serviceaccount-reader
-# roleRef:
-#   apiGroup: rbac.authorization.k8s.io
-#   kind: ClusterRole
-#   name: kubelet-serviceaccount-reader
-# subjects:
-# - apiGroup: rbac.authorization.k8s.io
-#   kind: Group
-#   name: system:nodes
-# ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: use-kubelet-identity
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: use-kubelet-identity
-subjects:
-- kind: Group
-  name: system:serviceaccounts
-  apiGroup: rbac.authorization.k8s.io
-EOF
-
-# Create ClusterRole for requesting service account tokens with custom audiences
-cat <<EOF | kubectl apply -f -
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubelet-serviceaccount-reader
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -176,14 +147,49 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: request-sa-token-audience
+  name: kubelet-node-permissions
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: request-sa-token-audience
 subjects:
-- kind: Group
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
   name: system:nodes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubelet-serviceaccount-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubelet-serviceaccount-reader
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+rules:
+- verbs: ["use-managed-identity"]
+  apiGroups: ["cid.wi.aks.azure.com"]
+  resources: ["${KUBELET_IDENTITY_CLIENT_ID}"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+subjects:
+- kind: Group
+  name: system:serviceaccounts
   apiGroup: rbac.authorization.k8s.io
 EOF
 ```
