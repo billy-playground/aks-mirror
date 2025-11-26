@@ -148,7 +148,6 @@ subjects:
   kind: Group
   name: system:nodes
 ---
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -184,7 +183,7 @@ roleRef:
   name: request-sa-token-audience
 subjects:
 - kind: Group
-  name: system:serviceaccounts
+  name: system:nodes
   apiGroup: rbac.authorization.k8s.io
 EOF
 ```
@@ -282,10 +281,6 @@ kind: Pod
 metadata:
   name: test-mcr-mirror
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-  labels:
-    azure.workload.identity/use: "true"
-  annotations:
-    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
