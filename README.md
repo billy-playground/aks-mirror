@@ -185,6 +185,10 @@ kind: Pod
 metadata:
   name: test-shell
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+  labels:
+    azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
@@ -203,7 +207,8 @@ SNI_NAME=$(kubectl get pod test-shell -n ${SERVICE_ACCOUNT_NAMESPACE} -o jsonpat
 
 if [[ -z "${SNI_NAME}" ]]; then
   echo "ERROR: Could not detect SNI_NAME from test pod"
-  exit 1
+  echo "Please ensure the pod has workload identity annotations and is running"
+  return 1
 fi
 
 echo "Detected SNI_NAME: ${SNI_NAME}"
@@ -234,10 +239,6 @@ kind: Pod
 metadata:
   name: test-acr-pull
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
-  labels:
-    azure.workload.identity/use: "true"
-  annotations:
-    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
