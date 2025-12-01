@@ -84,7 +84,9 @@ data:
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
-      '      - --ksa-auth-config=sni-name='${SNI_NAME}',default-client-id='${DEFAULT_CLIENT_ID}',api-server-ip=10.0.0.1' \
+      '      - --ib-sni-name='${SNI_NAME} \
+      '      - --ib-default-client-id='${DEFAULT_CLIENT_ID} \
+      '      - --ib-apiserver-ip=10.0.0.1' \
       > "${CRED_CONFIG_FILE}"
     
     echo "Generated credential provider config:"
