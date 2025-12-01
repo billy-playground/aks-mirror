@@ -204,6 +204,10 @@ kind: Pod
 metadata:
   name: test-shell
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+  labels:
+    azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/use-identity-binding: "true"
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
