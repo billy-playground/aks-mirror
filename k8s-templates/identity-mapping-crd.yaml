@@ -1,0 +1,67 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: identitymappings.aks.azure.com
+spec:
+  group: aks.azure.com
+  names:
+    kind: IdentityMapping
+    listKind: IdentityMappingList
+    plural: identitymappings
+    singular: identitymapping
+    shortNames:
+    - im
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              bindings:
+                type: object
+                description: Map of service account (namespace:name) to client ID
+                additionalProperties:
+                  type: string
+                  description: Azure AD Client ID
+                  pattern: '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$'
+          status:
+            type: object
+            properties:
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    message:
+                      type: string
+              processedBindings:
+                type: object
+                description: Map of successfully processed bindings (serviceAccount -> clientId)
+                additionalProperties:
+                  type: string
+                  description: Client ID bound to this service account
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Bindings
+      type: integer
+      description: Number of identity bindings
+      jsonPath: .spec.bindings[*]
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp

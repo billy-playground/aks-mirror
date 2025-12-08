@@ -1,8 +1,27 @@
 # Kubernetes Templates
 
-This directory contains Kubernetes resource templates for configuring AKS cluster nodes.
+This directory contains Kubernetes resource templates for configuring AKS cluster nodes and managing identity bindings.
 
 ## Files
+
+### Identity Mapping Resources
+
+#### identity-mapping-crd.yaml
+**Purpose:** Custom Resource Definition for IdentityMapping - manages Azure identity mappings using service account (namespace:name) as key and client ID as value.
+
+#### identity-mapping-controller.yaml
+**Purpose:** Kubernetes controller that watches IdentityMapping resources and automatically manages:
+- `sa-exchange` ServiceAccount in `kube-system`
+- ConfigMap storing SA to client ID mappings
+- Per-client-ID RBAC (ClusterRole + ClusterRoleBinding)
+- Node RBAC to allow credential providers to read ConfigMap and create tokens
+
+#### identity-mapping-example.yaml
+**Purpose:** Example IdentityMapping resource showing how to configure mappings.
+
+See the [Identity Mapping Controller Guide](#identity-mapping-controller) below for detailed usage.
+
+---
 
 ### configure-nodes.yaml
 
@@ -266,3 +285,295 @@ kubectl logs -l app=setup-credential-provider -f
 4. ✓ KUBELET_FLAGS line valid
 5. ✓ Old config path removed
 6. ✓ Old bin dir removed
+
+---
+
+## Identity Mapping Controller
+
+The Identity Mapping Controller manages Azure identity mappings for service accounts in AKS clusters.
+
+### Architecture
+
+```
+┌─────────────────────────────────────┐
+│  IdentityMapping (CRD)              │
+│  ┌───────────────────────────────┐ │
+│  │ spec:                         │ │
+│  │   bindings:                   │ │
+│  │     "ns1:sa1": "clientId1"    │ │
+│  │     "ns2:sa2": "clientId1"    │ │
+│  │     "ns3:sa3": "clientId2"    │ │
+│  └───────────────────────────────┘ │
+└──────────────┬──────────────────────┘
+               │ watches
+┌──────────────▼───────────────────────┐
+│  Identity Mapping Controller         │
+│  (Shell-based Kubernetes Operator)   │
+└──────────────┬───────────────────────┘
+               │ creates/manages
+┌──────────────▼───────────────────────┐
+│  1. sa-exchange ServiceAccount       │
+│     (kube-system namespace)          │
+└──────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────┐
+│  2. ConfigMap                        │
+│     acr-identity-binding-mappings    │
+│     data:                            │
+│       "ns1:sa1": "clientId1"         │
+│       "ns2:sa2": "clientId1"         │
+└─────────────┬────────────────────────┘
+              │
+              │ direct API access
+              ▼
+┌──────────────────────────────────────┐
+│  Credential Provider Binary          │
+│  (on node, uses kubelet kubeconfig)  │
+│  - Reads ConfigMap via API           │
+│  - Creates sa-exchange tokens via API│
+└──────────────────────────────────────┘
+              │
+              ▼
+┌──────────────────────────────────────┐
+│  3. Per-ClientID RBAC:               │
+│     - ClusterRole                    │
+│       ib-exchange-{clientId}         │
+│     - ClusterRoleBinding             │
+│       → sa-exchange                  │
+└──────────────────────────────────────┘
+```
+
+### Installation
+
+#### 1. Install the CRD
+
+```bash
+kubectl apply -f k8s-templates/identity-mapping-crd.yaml
+```
+
+#### 2. Deploy the Controller
+
+```bash
+kubectl apply -f k8s-templates/identity-mapping-controller.yaml
+```
+
+This creates:
+- ServiceAccount `identity-mapping-controller` in `kube-system`
+- ClusterRole and ClusterRoleBinding for the controller
+- ClusterRole `node-credential-provider-access` allowing nodes to read ConfigMap and create tokens
+- ClusterRoleBinding granting `system:nodes` group access to ConfigMap and token creation
+- Deployment running the controller
+- ConfigMap containing the controller shell script
+
+#### 3. Create an IdentityMapping
+
+```bash
+# Edit with your actual service accounts and client IDs
+kubectl apply -f k8s-templates/identity-mapping-example.yaml
+```
+
+### Usage
+
+#### Adding New Mappings
+
+Edit your IdentityMapping resource:
+
+```bash
+kubectl edit identitymapping default-identity-mappings
+```
+
+Add a new mapping:
+
+```yaml
+spec:
+  bindings:
+    "my-namespace:my-app-sa": "your-azure-ad-client-id"
+    "other-namespace:other-sa": "your-azure-ad-client-id"
+```
+
+The controller automatically:
+
+1. Updates ConfigMap `acr-identity-binding-mappings` in `kube-system`
+2. Creates ClusterRole `ib-exchange-{clientId}` for each unique client ID
+3. Creates ClusterRoleBinding binding to `sa-exchange`
+
+#### Viewing Mappings
+
+Check ConfigMap:
+
+```bash
+kubectl get configmap acr-identity-binding-mappings -n kube-system -o yaml
+```
+
+Check the status:
+
+```bash
+kubectl get identitymapping default-identity-mappings -o yaml
+```
+
+#### Viewing RBAC Resources
+
+List ClusterRoles:
+
+```bash
+kubectl get clusterrole -l app=identity-mapping-controller
+```
+
+List ClusterRoleBindings:
+
+```bash
+kubectl get clusterrolebinding -l app=identity-mapping-controller
+```
+
+#### Removing Mappings
+
+Remove the mapping from your IdentityMapping. The controller automatically cleans up the associated RBAC.
+
+### Controller Logic
+
+1. **Watch**: Monitors IdentityMapping resources
+2. **Reconcile**: On each change:
+   - Ensures `sa-exchange` ServiceAccount exists
+   - Updates ConfigMap with current mappings
+   - Creates/updates ClusterRole for each client ID
+   - Creates/updates ClusterRoleBinding to `sa-exchange`
+   - Cleans up RBAC for removed client IDs
+3. **Status Update**: Updates reconciliation results
+
+### Accessing Mappings from Credential Provider
+
+The credential provider binary running on each node can access mappings using the **Kubernetes API** (no local file needed!):
+
+```go
+// Uses kubelet's kubeconfig at /var/lib/kubelet/kubeconfig
+config, _ := clientcmd.BuildConfigFromFlags("", "/var/lib/kubelet/kubeconfig")
+clientset, _ := kubernetes.NewForConfig(config)
+
+// Read ConfigMap directly
+cm, _ := clientset.CoreV1().ConfigMaps("kube-system").
+    Get(context.Background(), "acr-identity-binding-mappings", metav1.GetOptions{})
+
+// cm.Data is map[string]string: "namespace:sa" -> "clientId"
+bindings := cm.Data
+
+// Look up client ID for requesting service account
+clientID := bindings["my-namespace:my-app"]
+
+// Request JWT token for sa-exchange
+tokenRequest := &authv1.TokenRequest{
+    Spec: authv1.TokenRequestSpec{
+        Audiences: []string{"api://AzureADTokenExchange"},
+        ExpirationSeconds: &expirationSeconds,
+    },
+}
+result, _ := clientset.CoreV1().ServiceAccounts("kube-system").
+    CreateToken(context.Background(), "sa-exchange", tokenRequest, metav1.CreateOptions{})
+token := result.Status.Token
+```
+
+**ConfigMap format:**
+```json
+{
+  "default:workload-sa-1": "00000000-0000-0000-0000-000000000001",
+  "production:api-service": "00000000-0000-0000-0000-000000000002"
+}
+```
+
+**Benefits:**
+- ✅ **No file sync needed** - Read directly from ConfigMap
+- ✅ **Immediate updates** - No propagation delay
+- ✅ **Same auth for everything** - Kubelet's kubeconfig works for both ConfigMap read and token creation
+- ✅ **One less component** - No DaemonSet to manage
+
+### Troubleshooting
+
+View controller logs:
+
+```bash
+kubectl logs -n kube-system -l app=identity-mapping-controller -f
+```
+
+Check controller status:
+
+```bash
+kubectl get pods -n kube-system -l app=identity-mapping-controller
+```
+
+Verify sa-exchange:
+
+```bash
+kubectl get serviceaccount sa-exchange -n kube-system
+```
+
+Check ConfigMap content:
+
+```bash
+kubectl get configmap acr-identity-binding-mappings -n kube-system -o yaml
+```
+
+Test API access from a node (for debugging):
+
+```bash
+# SSH to node or use kubectl node-shell
+kubectl node-shell <node-name>
+
+# Test reading ConfigMap
+kubectl --kubeconfig /var/lib/kubelet/kubeconfig \
+  get configmap acr-identity-binding-mappings -n kube-system -o json
+
+# Test creating token
+kubectl --kubeconfig /var/lib/kubelet/kubeconfig \
+  create token sa-exchange -n kube-system --audience api://AzureADTokenExchange
+```
+
+
+Verify the file on a node:
+
+```bash
+# From inside a sync pod
+kubectl exec -n kube-system <sync-pod-name> -- cat /host/kubelet/identity-bindings.json
+
+# Or from a node directly
+cat /var/lib/kubelet/identity-bindings.json
+```
+
+Verify sa-exchange:
+
+```bash
+kubectl get serviceaccount sa-exchange -n kube-system
+```
+
+Check if bindings are being updated:
+
+```bash
+# Watch the ConfigMap
+kubectl get configmap acr-identity-binding-mappings -n kube-system -o yaml -w
+
+# Watch file changes in sync pod
+kubectl exec -n kube-system <sync-pod-name> -it -- bash
+# Then inside the pod:
+watch cat /host/kubelet/identity-bindings.json
+```
+
+### Manual Cleanup
+
+```bash
+# Delete ClusterRoles
+kubectl delete clusterrole -l app=identity-mapping-controller
+
+# Delete ClusterRoleBindings
+kubectl delete clusterrolebinding -l app=identity-mapping-controller
+
+# Delete ConfigMap
+kubectl delete configmap acr-identity-binding-mappings -n kube-system
+
+# Delete sa-exchange
+kubectl delete serviceaccount sa-exchange -n kube-system
+
+# Delete controller
+kubectl delete -f k8s-templates/identity-mapping-controller.yaml
+
+# Delete CRD (also deletes all IdentityMapping resources)
+kubectl delete -f k8s-templates/identity-mapping-crd.yaml
+```

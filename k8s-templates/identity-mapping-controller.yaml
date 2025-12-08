@@ -1,0 +1,396 @@
+---
+# ServiceAccount for the controller
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: identity-mapping-controller
+  namespace: kube-system
+---
+# ClusterRole for nodes to access identity bindings and create tokens
+# This is created by the controller to allow credential provider binaries on nodes to:
+# 1. Read the acr-identity-binding-mappings ConfigMap
+# 2. Create JWT tokens for sa-exchange ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-credential-provider-access
+  labels:
+    app: identity-mapping-controller
+rules:
+# Read the identity bindings ConfigMap
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["acr-identity-binding-mappings"]
+  verbs: ["get"]
+# Create tokens for sa-exchange
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  resourceNames: ["sa-exchange"]
+  verbs: ["create"]
+---
+# ClusterRoleBinding granting nodes access to read ConfigMap and create tokens
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nodes-credential-provider-access
+  labels:
+    app: identity-mapping-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: node-credential-provider-access
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes  # All kubelet nodes
+---
+# ClusterRole for the controller to manage resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: identity-mapping-controller
+rules:
+# Manage IdentityMapping CRs
+- apiGroups: ["aks.azure.com"]
+  resources: ["identitymappings"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["aks.azure.com"]
+  resources: ["identitymappings/status"]
+  verbs: ["get", "update", "patch"]
+# Manage ClusterRoles and ClusterRoleBindings
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterroles", "clusterrolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Manage ConfigMaps
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Manage ServiceAccounts
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "list", "watch", "create"]
+# Events for logging
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+# ClusterRoleBinding for the controller
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: identity-mapping-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: identity-mapping-controller
+subjects:
+- kind: ServiceAccount
+  name: identity-mapping-controller
+  namespace: kube-system
+---
+# Deployment for the controller
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-mapping-controller
+  namespace: kube-system
+  labels:
+    app: identity-mapping-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: identity-mapping-controller
+  template:
+    metadata:
+      labels:
+        app: identity-mapping-controller
+    spec:
+      serviceAccountName: identity-mapping-controller
+      containers:
+      - name: controller
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - /controller/controller.sh
+        volumeMounts:
+        - name: controller-script
+          mountPath: /controller
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: controller-script
+        configMap:
+          name: identity-mapping-controller-script
+          defaultMode: 0755
+---
+# ConfigMap containing the controller script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-mapping-controller-script
+  namespace: kube-system
+data:
+  controller.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    CONFIGMAP_NAME="acr-identity-binding-mappings"
+    CONFIGMAP_NAMESPACE="kube-system"
+    SA_EXCHANGE_NAME="sa-exchange"
+    SA_EXCHANGE_NAMESPACE="kube-system"
+    
+    log() {
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+    }
+    
+    # Ensure sa-exchange ServiceAccount exists
+    ensure_sa_exchange() {
+        if kubectl get serviceaccount "$SA_EXCHANGE_NAME" -n "$SA_EXCHANGE_NAMESPACE" &>/dev/null; then
+            log "ServiceAccount $SA_EXCHANGE_NAME already exists"
+        else
+            log "Creating ServiceAccount $SA_EXCHANGE_NAME"
+            kubectl create serviceaccount "$SA_EXCHANGE_NAME" -n "$SA_EXCHANGE_NAMESPACE"
+            log "ServiceAccount $SA_EXCHANGE_NAME created"
+        fi
+    }
+    
+    # Ensure ConfigMap exists
+    ensure_configmap() {
+        if ! kubectl get configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" &>/dev/null; then
+            log "Creating ConfigMap $CONFIGMAP_NAME"
+            kubectl create configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE"
+            log "ConfigMap $CONFIGMAP_NAME created"
+        fi
+    }
+    
+    # Update ConfigMap with bindings from IdentityBindingConfig
+    update_configmap() {
+        local ibc_name=$1
+        
+        # Get the bindings from the IdentityMapping spec
+        local bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.bindings}')
+        
+        if [ -z "$bindings" ] || [ "$bindings" = "{}" ]; then
+            log "No bindings found in $ibc_name"
+            return
+        fi
+        
+        ensure_configmap
+        
+        # Bindings is now a flat map: "namespace:serviceaccount" -> "clientId"
+        # We need to invert it for ConfigMap storage: "namespace:serviceaccount" -> "clientId"
+        # So we can just copy it directly
+        
+        # Clear existing ConfigMap data first
+        kubectl patch configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
+            --type merge -p '{"data":{}}'
+        
+        # Parse JSON and update ConfigMap with each service account -> client ID mapping
+        local service_accounts=$(echo "$bindings" | jq -r 'keys[]')
+        
+        for sa in $service_accounts; do
+            # Get client ID for this service account
+            local client_id=$(echo "$bindings" | jq -r --arg sa "$sa" '.[$sa]')
+            
+            if [ -n "$client_id" ]; then
+                # Patch ConfigMap to add this mapping
+                kubectl patch configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
+                    --type merge -p "{\"data\":{\"$sa\":\"$client_id\"}}"
+                log "Updated ConfigMap: $sa -> $client_id"
+            fi
+        done
+    }
+    
+    # Create or update ClusterRole and ClusterRoleBinding for a client ID
+    create_or_update_rbac() {
+        local client_id=$1
+        local role_name="ib-exchange-${client_id}"
+        
+        # Create ClusterRole YAML
+        cat <<EOF | kubectl apply -f -
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: ${role_name}
+      labels:
+        app: identity-mapping-controller
+        client-id: ${client_id}
+    rules:
+    - verbs:
+      - use-managed-identity
+      apiGroups:
+      - cid.wi.aks.azure.com
+      resources:
+      - ${client_id}
+    EOF
+        
+        log "Created/Updated ClusterRole $role_name"
+        
+        # Create ClusterRoleBinding YAML
+        cat <<EOF | kubectl apply -f -
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: ${role_name}
+      labels:
+        app: identity-mapping-controller
+        client-id: ${client_id}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: ${role_name}
+    subjects:
+    - kind: ServiceAccount
+      name: ${SA_EXCHANGE_NAME}
+      namespace: ${SA_EXCHANGE_NAMESPACE}
+    EOF
+        
+        log "Created/Updated ClusterRoleBinding $role_name"
+    }
+    
+    # Clean up ClusterRoles and ClusterRoleBindings for removed client IDs
+    cleanup_unused_rbac() {
+        local current_client_ids=$1
+        
+        # Get all ClusterRoles with our label
+        local existing_roles=$(kubectl get clusterrole -l app=identity-mapping-controller -o jsonpath='{.items[*].metadata.labels.client-id}')
+        
+        for existing_id in $existing_roles; do
+            if ! echo "$current_client_ids" | grep -qw "$existing_id"; then
+                local role_name="ib-exchange-${existing_id}"
+                log "Cleaning up ClusterRole $role_name"
+                kubectl delete clusterrole "$role_name" --ignore-not-found=true
+                kubectl delete clusterrolebinding "$role_name" --ignore-not-found=true
+                log "Deleted ClusterRole and ClusterRoleBinding $role_name"
+            fi
+        done
+    }
+    
+    # Reconcile a single IdentityBindingConfig
+    reconcile() {
+        local ibc_name=$1
+        
+        log "Reconciling IdentityMapping $ibc_name"
+        
+        # Check if the resource still exists
+        if ! kubectl get identitymapping "$ibc_name" &>/dev/null; then
+            log "IdentityMapping $ibc_name not found, skipping"
+            return
+        fi
+        
+        # Ensure sa-exchange exists
+        ensure_sa_exchange
+        
+        # Update ConfigMap with bindings
+        update_configmap "$ibc_name"
+        
+        # Get all unique client IDs from this IdentityMapping (values in the map)
+        local client_ids=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.bindings}' | jq -r 'to_entries[].value' | sort -u)
+        
+        # Create/update RBAC for each unique client ID
+        for client_id in $client_ids; do
+            create_or_update_rbac "$client_id"
+        done
+        
+        # Cleanup unused RBAC (pass current client IDs)
+        cleanup_unused_rbac "$client_ids"
+        
+        # Update status (simple status update)
+        local num_bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.bindings}' | jq 'length')
+        local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        kubectl patch identitymapping "$ibc_name" --type=merge --subresource=status -p "{
+          \"status\": {
+            \"conditions\": [{
+              \"type\": \"Ready\",
+              \"status\": \"True\",
+              \"lastTransitionTime\": \"$timestamp\",
+              \"reason\": \"ReconcileSuccess\",
+              \"message\": \"Successfully reconciled $num_bindings service account bindings\"
+            }]
+          }
+        }" 2>/dev/null || log "Warning: Failed to update status (may not be critical)"
+        
+        log "Reconciled $ibc_name with $num_bindings service account bindings"
+    }
+    
+    # Initial reconciliation of all existing resources
+    initial_reconcile() {
+        log "Starting initial reconciliation"
+        
+        local ibc_names=$(kubectl get identitymapping -o jsonpath='{.items[*].metadata.name}')
+        
+        if [ -z "$ibc_names" ]; then
+            log "No IdentityMappings found"
+            return
+        fi
+        
+        for ibc_name in $ibc_names; do
+            reconcile "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
+        done
+        
+        log "Initial reconciliation complete"
+    }
+    
+    # Watch for changes to IdentityMapping resources
+    watch_resources() {
+        log "Watching for IdentityMapping changes"
+        
+        # Use kubectl get --watch to monitor changes
+        kubectl get identitymapping --watch -o json | while read -r line; do
+            # Parse the event
+            local event_type=$(echo "$line" | jq -r '.type // empty')
+            local ibc_name=$(echo "$line" | jq -r '.object.metadata.name // empty')
+            
+            if [ -z "$event_type" ] || [ -z "$ibc_name" ]; then
+                continue
+            fi
+            
+            log "Received $event_type event for $ibc_name"
+            
+            case "$event_type" in
+                ADDED|MODIFIED)
+                    reconcile "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
+                    ;;
+                DELETED)
+                    log "IdentityMapping $ibc_name deleted (cleanup handled by labels)"
+                    ;;
+            esac
+        done
+    }
+    
+    # Main function
+    main() {
+        log "Starting Identity Mapping Controller"
+        
+        # Check if kubectl is available
+        if ! command -v kubectl &>/dev/null; then
+            log "Error: kubectl not found"
+            exit 1
+        fi
+        
+        # Check if jq is available
+        if ! command -v jq &>/dev/null; then
+            log "Error: jq not found"
+            exit 1
+        fi
+        
+        # Initial reconciliation
+        initial_reconcile
+        
+        # Watch for changes (will run forever)
+        while true; do
+            watch_resources || {
+                log "Watch error, reconnecting in 5 seconds..."
+                sleep 5
+            }
+        done
+    }
+    
+    main
