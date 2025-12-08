@@ -27,6 +27,18 @@ rules:
   resources: ["serviceaccounts/token"]
   resourceNames: ["sa-exchange"]
   verbs: ["create"]
+# Read ServiceAccounts to verify they exist
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get"]
+# Request tokens for any service account with any audience
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  verbs: ["create"]
+# Request tokens with custom audiences
+- apiGroups: [""]
+  resources: ["*"]
+  verbs: ["request-serviceaccounts-token-audience"]
 ---
 # ClusterRoleBinding granting nodes access to read ConfigMap and create tokens
 apiVersion: rbac.authorization.k8s.io/v1
@@ -60,7 +72,7 @@ rules:
 # Manage ClusterRoles and ClusterRoleBindings
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["clusterroles", "clusterrolebindings"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "escalate", "bind"]
 # Manage ConfigMaps
 - apiGroups: [""]
   resources: ["configmaps"]
@@ -183,28 +195,14 @@ data:
         
         ensure_configmap
         
-        # Bindings is now a flat map: "namespace:serviceaccount" -> "clientId"
-        # We need to invert it for ConfigMap storage: "namespace:serviceaccount" -> "clientId"
-        # So we can just copy it directly
-        
-        # Clear existing ConfigMap data first
+        # Store the entire bindings JSON as a single string value with key "mappings"
+        # This preserves the exact "namespace:serviceaccount" -> "clientId" mapping
+        # We need to escape the JSON string properly for the patch command
+        local bindings_json=$(echo "$bindings" | jq -c . | jq -Rs .)
         kubectl patch configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
-            --type merge -p '{"data":{}}'
+            --type merge -p "{\"data\":{\"mappings\":$bindings_json}}"
         
-        # Parse JSON and update ConfigMap with each service account -> client ID mapping
-        local service_accounts=$(echo "$bindings" | jq -r 'keys[]')
-        
-        for sa in $service_accounts; do
-            # Get client ID for this service account
-            local client_id=$(echo "$bindings" | jq -r --arg sa "$sa" '.[$sa]')
-            
-            if [ -n "$client_id" ]; then
-                # Patch ConfigMap to add this mapping
-                kubectl patch configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
-                    --type merge -p "{\"data\":{\"$sa\":\"$client_id\"}}"
-                log "Updated ConfigMap: $sa -> $client_id"
-            fi
-        done
+        log "Updated ConfigMap with $(echo "$bindings" | jq 'length') mappings"
     }
     
     # Create or update ClusterRole and ClusterRoleBinding for a client ID
@@ -342,13 +340,17 @@ data:
     watch_resources() {
         log "Watching for IdentityMapping changes"
         
-        # Use kubectl get --watch to monitor changes
-        kubectl get identitymapping --watch -o json | while read -r line; do
-            # Parse the event
-            local event_type=$(echo "$line" | jq -r '.type // empty')
-            local ibc_name=$(echo "$line" | jq -r '.object.metadata.name // empty')
+        # Use kubectl get --watch with jsonpath to get simple events
+        kubectl get identitymapping --watch --output-watch-events -o json | while IFS= read -r line; do
+            # Skip empty lines
+            [ -z "$line" ] && continue
             
-            if [ -z "$event_type" ] || [ -z "$ibc_name" ]; then
+            # Try to parse as JSON
+            local event_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+            local ibc_name=$(echo "$line" | jq -r '.object.metadata.name // empty' 2>/dev/null)
+            
+            # Skip if parsing failed
+            if [ -z "$event_type" ] || [ -z "$ibc_name" ] || [ "$event_type" = "null" ] || [ "$ibc_name" = "null" ]; then
                 continue
             fi
             

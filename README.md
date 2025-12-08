@@ -61,23 +61,31 @@ az aks create \
 # Get cluster credentials
 az aks get-credentials --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" --overwrite-existing
 
-# Get the kubelet identity from the cluster
-export KUBELET_IDENTITY_CLIENT_ID="$(az aks show \
+# Create a new user-managed identity for ACR access
+export IDENTITY_NAME="id-acr-access-${RANDOM_ID}"
+
+az identity create \
+    --name "${IDENTITY_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
-    --name "${CLUSTER_NAME}" \
-    --query 'identityProfile.kubeletidentity.clientId' \
+    --location "${LOCATION}"
+
+# Get the identity details
+export USER_IDENTITY_CLIENT_ID="$(az identity show \
+    --name "${IDENTITY_NAME}" \
+    --resource-group "${RESOURCE_GROUP}" \
+    --query 'clientId' \
     --output tsv)"
 
-export KUBELET_IDENTITY_OBJECT_ID="$(az aks show \
+export USER_IDENTITY_OBJECT_ID="$(az identity show \
+    --name "${IDENTITY_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
-    --name "${CLUSTER_NAME}" \
-    --query 'identityProfile.kubeletidentity.objectId' \
+    --query 'principalId' \
     --output tsv)"
 
-export KUBELET_IDENTITY_RESOURCE_ID="$(az aks show \
+export USER_IDENTITY_RESOURCE_ID="$(az identity show \
+    --name "${IDENTITY_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
-    --name "${CLUSTER_NAME}" \
-    --query 'identityProfile.kubeletidentity.resourceId' \
+    --query 'id' \
     --output tsv)"
 
 # Create Azure Container Registry
@@ -94,104 +102,71 @@ az acr cache create \
     --source-repo "mcr.microsoft.com/*" \
     --target-repo "*"
 
-# Assign AcrPull role to the kubelet identity
+# Assign AcrPull role to the user-managed identity
 az role assignment create \
-    --assignee-object-id "${KUBELET_IDENTITY_OBJECT_ID}" \
+    --assignee-object-id "${USER_IDENTITY_OBJECT_ID}" \
     --assignee-principal-type ServicePrincipal \
     --role AcrPull \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
 
-## Step 2: Configure Identity Binding and Service Account
+## Step 2: Install Identity Mapping CRD and Configure Service Accounts
 
 ```bash
-# Create identity binding for kubelet identity (replaces manual federated credential creation)
+# Install the Identity Mapping CRD
+kubectl apply -f k8s-templates/identity-mapping-crd.yaml
+
+# Deploy the Identity Mapping Controller
+kubectl apply -f k8s-templates/identity-mapping-controller.yaml
+
+# Wait for controller to be ready
+kubectl wait --for=condition=Available deployment/identity-mapping-controller -n kube-system --timeout=120s
+
+# Create identity binding for the user-managed identity (replaces manual federated credential creation)
 # Note: identity binding name must be lowercase letters, numbers, and hyphens only
 az aks identity-binding create \
     --resource-group "${RESOURCE_GROUP}" \
     --cluster-name "${CLUSTER_NAME}" \
-    --name "kubelet-identity-binding-$RANDOM_ID" \
-    --managed-identity-resource-id "${KUBELET_IDENTITY_RESOURCE_ID}"
+    --name "acr-identity-binding-$RANDOM_ID" \
+    --managed-identity-resource-id "${USER_IDENTITY_RESOURCE_ID}"
 
 # Set up service account variables
 export SERVICE_ACCOUNT_NAMESPACE="default"
 export SERVICE_ACCOUNT_NAME="workload-identity-sa$RANDOM_ID"
 export TENANT_ID="$(az account show --query tenantId --output tsv)"
 
-# Create Service Account with workload identity annotation. TODO: move to overlaymgr
+# Create Service Account with workload identity annotation
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ${SERVICE_ACCOUNT_NAME}
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kubelet-serviceaccount-reader
-rules:
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: request-sa-token-audience
-rules:
-- verbs: ["request-serviceaccounts-token-audience"]
-  apiGroups: [""]
-  resources: ["*"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubelet-node-permissions
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: request-sa-token-audience
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: system:nodes
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubelet-serviceaccount-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubelet-serviceaccount-reader
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: system:nodes
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
-rules:
-- verbs: ["use-managed-identity"]
-  apiGroups: ["cid.wi.aks.azure.com"]
-  resources: ["${KUBELET_IDENTITY_CLIENT_ID}"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
-subjects:
-- kind: Group
-  name: system:serviceaccounts
-  apiGroup: rbac.authorization.k8s.io
 EOF
+
+# Create the IdentityMapping resource to map the service account to the user-managed identity
+cat <<EOF | kubectl apply -f -
+apiVersion: aks.azure.com/v1alpha1
+kind: IdentityMapping
+metadata:
+  name: default-identity-mappings
+spec:
+  bindings:
+    "${SERVICE_ACCOUNT_NAMESPACE}:${SERVICE_ACCOUNT_NAME}": "${USER_IDENTITY_CLIENT_ID}"
+EOF
+
+# Verify the controller created the necessary resources
+echo "Waiting for controller to reconcile..."
+sleep 5
+
+echo "Checking sa-exchange ServiceAccount:"
+kubectl get serviceaccount sa-exchange -n kube-system
+
+echo "Checking ConfigMap:"
+kubectl get configmap acr-identity-binding-mappings -n kube-system -o yaml
+
+echo "Checking ClusterRoles:"
+kubectl get clusterrole -l app=identity-mapping-controller
 ```
 
 ## Step 3: Deploy Test Pod and Configure Credential Provider on AKS Nodes
@@ -233,7 +208,7 @@ fi
 echo "Detected SNI_NAME: ${SNI_NAME}"
 
 # Apply the node configuration DaemonSet with ACR_NAME, SNI_NAME, and DEFAULT_CLIENT_ID substitution
-sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" -e "s/{{DEFAULT_CLIENT_ID}}/${KUBELET_IDENTITY_CLIENT_ID}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
+sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" -e "s/{{DEFAULT_CLIENT_ID}}/${USER_IDENTITY_CLIENT_ID}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
 
 # Wait for DaemonSet to complete configuration on all nodes
 kubectl rollout status daemonset/configure-nodes -n kube-system --timeout=300s
