@@ -159,9 +159,6 @@ EOF
 echo "Waiting for controller to reconcile..."
 sleep 5
 
-echo "Checking sa-exchange ServiceAccount:"
-kubectl get serviceaccount sa-exchange -n kube-system
-
 echo "Checking ConfigMap:"
 kubectl get configmap acr-identity-binding-mappings -n kube-system -o yaml
 
