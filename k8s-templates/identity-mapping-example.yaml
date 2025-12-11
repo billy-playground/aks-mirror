@@ -3,7 +3,7 @@ kind: IdentityMapping
 metadata:
   name: default-identity-mappings
 spec:
-  bindings:
+  image-pull:
     # Key: Service account in "namespace:name" format
     # Value: Azure AD client ID (UUID)
     

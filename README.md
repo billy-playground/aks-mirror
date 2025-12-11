@@ -151,7 +151,7 @@ kind: IdentityMapping
 metadata:
   name: default-identity-mappings
 spec:
-  bindings:
+  image-pull:
     "${SERVICE_ACCOUNT_NAMESPACE}:${SERVICE_ACCOUNT_NAME}": "${USER_IDENTITY_CLIENT_ID}"
 EOF
 

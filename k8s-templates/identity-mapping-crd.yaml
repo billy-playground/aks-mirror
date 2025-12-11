@@ -23,7 +23,7 @@ spec:
           spec:
             type: object
             properties:
-              bindings:
+              image-pull:
                 type: object
                 description: Map of service account (namespace:name) to client ID
                 additionalProperties:
@@ -49,19 +49,15 @@ spec:
                       type: string
                     message:
                       type: string
-              processedBindings:
+              processedImagePull:
                 type: object
-                description: Map of successfully processed bindings (serviceAccount -> clientId)
+                description: Map of successfully processed image-pull mappings (serviceAccount -> clientId)
                 additionalProperties:
                   type: string
                   description: Client ID bound to this service account
     subresources:
       status: {}
     additionalPrinterColumns:
-    - name: Bindings
-      type: integer
-      description: Number of identity bindings
-      jsonPath: .spec.bindings[*]
     - name: Age
       type: date
       jsonPath: .metadata.creationTimestamp

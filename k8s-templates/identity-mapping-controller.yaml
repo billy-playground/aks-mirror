@@ -222,25 +222,25 @@ data:
         log "Created/Updated ClusterRoleBinding $role_name with $sa_count service account(s)"
     }
     
-    # Write bindings to ConfigMap (namespace:sa -> clientId format)
+    # Write image-pull mappings to ConfigMap as a JSON string
     write_configmap() {
         local bindings=$1
         
         ensure_configmap
         
         if [ -z "$bindings" ] || [ "$bindings" = "{}" ]; then
-            log "No bindings to write to ConfigMap"
+            log "No image-pull mappings to write to ConfigMap"
             return
         fi
         
-        # Build ConfigMap data with "namespace:serviceaccount" as keys and client IDs as values
-        local patch_data=$(echo "$bindings" | jq -c 'to_entries | map({key: .key, value: .value}) | from_entries')
+        # Store the entire image-pull mappings JSON as a string under "mappings" key
+        local bindings_escaped=$(echo "$bindings" | jq -c . | jq -R .)
         
-        # Apply the patch (replace entire data section)
+        # Apply the patch
         kubectl patch configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
-            --type merge -p "{\"data\":$patch_data}"
+            --type merge -p "{\"data\":{\"mappings\":$bindings_escaped}}"
         
-        log "Updated ConfigMap with $(echo "$bindings" | jq 'length') binding(s)"
+        log "Updated ConfigMap with $(echo "$bindings" | jq 'length') image-pull mapping(s)"
     }
     
     # Delete all RBAC resources (for DELETE events)
@@ -343,14 +343,14 @@ data:
             create_or_update_rbac_with_subjects "$client_id" "${service_accounts[@]}"
         done
         
-        # Step 3: Write bindings to ConfigMap
+        # Step 3: Write image-pull mappings to ConfigMap
         write_configmap "$bindings"
         
         # Update status
         local num_bindings=$(echo "$bindings" | jq 'length')
-        update_status "$ibc_name" "True" "ReconcileSuccess" "Successfully reconciled $num_bindings service account bindings"
+        update_status "$ibc_name" "True" "ReconcileSuccess" "Successfully reconciled $num_bindings image-pull mappings"
         
-        log "CREATE complete: Reconciled $ibc_name with $num_bindings service account bindings"
+        log "CREATE complete: Reconciled $ibc_name with $num_bindings image-pull mappings"
     }
     
     # Reconcile MODIFY operation (incremental)
@@ -402,8 +402,9 @@ data:
         done
         
         # Step 3: Read current ConfigMap and remove RBAC for client IDs not in new bindings
-        local old_client_ids=$(kubectl get configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
-            -o jsonpath='{.data}' 2>/dev/null | jq -r 'to_entries[].value' | sort -u || echo "")
+        local old_bindings=$(kubectl get configmap "$CONFIGMAP_NAME" -n "$CONFIGMAP_NAMESPACE" \
+            -o jsonpath='{.data.mappings}' 2>/dev/null || echo "{}")
+        local old_client_ids=$(echo "$old_bindings" | jq -r 'to_entries[].value' | sort -u || echo "")
         
         for client_id in $old_client_ids; do
             # Check if client_id exists in the new map
@@ -415,14 +416,14 @@ data:
             fi
         done
         
-        # Step 4: Write bindings to ConfigMap
+        # Step 4: Write image-pull mappings to ConfigMap
         write_configmap "$bindings"
         
         # Update status
         local num_bindings=$(echo "$bindings" | jq 'length')
-        update_status "$ibc_name" "True" "ReconcileSuccess" "Successfully reconciled $num_bindings service account bindings"
+        update_status "$ibc_name" "True" "ReconcileSuccess" "Successfully reconciled $num_bindings image-pull mappings"
         
-        log "MODIFY complete: Reconciled $ibc_name with $num_bindings service account bindings"
+        log "MODIFY complete: Reconciled $ibc_name with $num_bindings image-pull mappings"
     }
     
     # Initial reconciliation of all existing resources
