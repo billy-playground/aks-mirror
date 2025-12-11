@@ -445,69 +445,45 @@ data:
         log "Initial reconciliation complete"
     }
     
-    # Watch for changes to IdentityMapping resources
-    watch_resources() {
-        log "Watching for IdentityMapping changes"
-        
-        # Use kubectl get --watch with jsonpath to get simple events
-        kubectl get identitymapping --watch --output-watch-events -o json | while IFS= read -r line; do
-            # Skip empty lines
-            [ -z "$line" ] && continue
-            
-            # Try to parse as JSON
-            local event_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-            local ibc_name=$(echo "$line" | jq -r '.object.metadata.name // empty' 2>/dev/null)
-            
-            # Skip if parsing failed
-            if [ -z "$event_type" ] || [ -z "$ibc_name" ] || [ "$event_type" = "null" ] || [ "$ibc_name" = "null" ]; then
-                continue
-            fi
-            
-            log "Received $event_type event for $ibc_name"
-            
-            case "$event_type" in
-                ADDED)
-                    # CREATE operation
-                    reconcile_create "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
-                    ;;
-                MODIFIED)
-                    # MODIFY operation (incremental)
-                    reconcile_modify "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
-                    ;;
-                DELETED)
-                    # DELETE operation: remove all ib-exchange-* RBAC resources
-                    log "IdentityMapping $ibc_name deleted, cleaning up all RBAC resources"
-                    cleanup_all_rbac
-                    ;;
-            esac
-        done
-    }
-    
-    # Main function
+    # Main reconciliation loop
     main() {
         log "Starting Identity Mapping Controller"
         
-        # Check if kubectl is available
         if ! command -v kubectl &>/dev/null; then
             log "Error: kubectl not found"
             exit 1
         fi
         
-        # Check if jq is available
         if ! command -v jq &>/dev/null; then
             log "Error: jq not found"
             exit 1
         fi
         
-        # Initial reconciliation
         initial_reconcile
         
-        # Watch for changes (will run forever)
-        while true; do
-            watch_resources || {
-                log "Watch error, reconnecting in 5 seconds..."
-                sleep 5
-            }
+        log "Watching for IdentityMapping changes"
+        kubectl get identitymapping --watch --output-watch-events -o json | while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            
+            local event_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+            local ibc_name=$(echo "$line" | jq -r '.object.metadata.name // empty' 2>/dev/null)
+            
+            [ -z "$event_type" ] || [ -z "$ibc_name" ] || [ "$event_type" = "null" ] || [ "$ibc_name" = "null" ] && continue
+            
+            log "Received $event_type event for $ibc_name"
+            
+            case "$event_type" in
+                ADDED)
+                    reconcile_create "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
+                    ;;
+                MODIFIED)
+                    reconcile_modify "$ibc_name" || log "Error: Failed to reconcile $ibc_name"
+                    ;;
+                DELETED)
+                    log "IdentityMapping $ibc_name deleted, cleaning up all RBAC resources"
+                    cleanup_all_rbac
+                    ;;
+            esac
         done
     }
     
