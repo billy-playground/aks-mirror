@@ -313,14 +313,14 @@ data:
         fi
         
         # Step 1: Read bindings and remap by client ID in memory
-        local bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.bindings}')
+        local bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.image-pull}')
         
         if [ -z "$bindings" ] || [ "$bindings" = "{}" ]; then
             log "No bindings found in $ibc_name"
             return
         fi
         
-        # Build in-memory map: client_id -> space-separated list of "namespace:sa"
+        # Build in-memory map (new): client_id -> space-separated list of "namespace:sa"
         local -A client_id_map
         while IFS= read -r line; do
             local sa_key=$(echo "$line" | jq -r '.key')
@@ -371,7 +371,7 @@ data:
         fi
         
         # Step 1: Read bindings and remap by client ID in memory
-        local bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.bindings}')
+        local bindings=$(kubectl get identitymapping "$ibc_name" -o jsonpath='{.spec.image-pull}')
         
         if [ -z "$bindings" ] || [ "$bindings" = "{}" ]; then
             log "No bindings found in $ibc_name"
