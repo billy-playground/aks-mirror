@@ -89,6 +89,17 @@ The IdentityMapping Custom Resource Definition (CRD) eliminates all manual k8s R
 
 That's it. The controller handles everything else automatically.
 
+### Configuration Comparison
+
+| Configuration Before | Configuration After |
+|---------------------|---------------------|
+| **Create a Kubernetes namespace to use the KSA:**<br/>`kubectl create namespace NAMESPACE` | **Create a Kubernetes namespace to use the KSA:**<br/>`kubectl create namespace NAMESPACE` |
+| **Create the KSA:**<br/>`kubectl create serviceaccount KSA_NAME --namespace NAMESPACE` | **Create the KSA:**<br/>`kubectl create serviceaccount KSA_NAME --namespace NAMESPACE` |
+| **Create ClusterRole:**<br/>`kubectl apply -f clusterrole.yaml` | **No longer required** |
+| **Create ClusterRoleBinding:**<br/>`kubectl apply -f clusterrolebinding.yaml` | **No longer required** |
+| **Annotate Service Account:**<br/>`kubectl annotate serviceaccount KSA_NAME --namespace NAMESPACE azure.workload.identity/client-id="CLIENT_ID"` | **No longer required** |
+| **Repeat for each identity** | **Define all mappings in one IdentityMapping resource:**<br/>`kubectl apply -f identity-mapping.yaml` |
+
 ### New Simplified Workflow
 
 #### Step 1: Install the CRD and Controller (Managed by AKS)
