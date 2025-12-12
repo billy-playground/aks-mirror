@@ -1,0 +1,19 @@
+apiVersion: aks.azure.com/v1alpha1
+kind: IdentityMapping
+metadata:
+  name: default-identity-mappings
+spec:
+  image-pull:
+    # Key: Service account in "namespace:name" format
+    # Value: Azure AD client ID (UUID)
+    
+    "default:workload-sa-1": "00000000-0000-0000-0000-000000000001"
+    "default:workload-sa-2": "00000000-0000-0000-0000-000000000001"
+    "production:api-service": "00000000-0000-0000-0000-000000000001"
+    "production:backend-service": "00000000-0000-0000-0000-000000000002"
+    "staging:test-service": "00000000-0000-0000-0000-000000000002"
+    
+    # Add more service account bindings here
+    # "my-namespace:my-app-sa": "your-azure-ad-client-id"
+    # "other-namespace:other-sa": "your-azure-ad-client-id"
+
