@@ -77,10 +77,10 @@ data:
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
       '    tokenAttributes:' \
-      '      serviceAccountTokenAudience: api://AKSIdentityBinding' \
-      '      requireServiceAccount: true' \
+      '      requireServiceAccount: false' \
       '      optionalServiceAccountAnnotationKeys:' \
       '      - kubernetes.azure.com/acr-client-id' \
+      '      - kubernetes.azure.com/acr-tenant-id' \
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
