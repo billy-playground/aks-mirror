@@ -52,7 +52,7 @@ data:
 
     # Download the Azure ACR credential provider binary
     echo "Downloading Azure ACR credential provider for ${BINARY_ARCH}..."
-    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/validate-credprovider/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
+    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/validate-defaultoff-mi-fallback/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
       -o /opt/azure-acr-credential-provider
     chmod +x /opt/azure-acr-credential-provider
     echo "✓ Downloaded and installed to: /opt/azure-acr-credential-provider"
@@ -76,11 +76,6 @@ data:
       '      - "mcr.microsoft.com"' \
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
-      '    tokenAttributes:' \
-      '      requireServiceAccount: false' \
-      '      optionalServiceAccountAnnotationKeys:' \
-      '      - kubernetes.azure.com/acr-client-id' \
-      '      - kubernetes.azure.com/acr-tenant-id' \
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
