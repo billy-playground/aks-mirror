@@ -142,7 +142,7 @@ metadata:
 rules:
 - verbs: ["request-serviceaccounts-token-audience"]
   apiGroups: [""]
-  resources: ["*"]
+  resources: ["api://AKSIdentityBinding"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
