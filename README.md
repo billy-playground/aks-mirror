@@ -52,7 +52,7 @@ az aks create \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${CLUSTER_NAME}" \
     --location "${LOCATION}" \
-    --kubernetes-version 1.33 \
+    --kubernetes-version 1.34 \
     --enable-oidc-issuer \
     --enable-workload-identity \
     --node-vm-size "Standard_D2s_v5" \
@@ -129,15 +129,6 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubelet-serviceaccount-reader
-rules:
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
   name: request-sa-token-audience
 rules:
 - verbs: ["request-serviceaccounts-token-audience"]
@@ -152,19 +143,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: request-sa-token-audience
-subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: system:nodes
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubelet-serviceaccount-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubelet-serviceaccount-reader
 subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group

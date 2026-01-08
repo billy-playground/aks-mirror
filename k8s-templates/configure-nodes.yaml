@@ -78,6 +78,7 @@ data:
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
       '    tokenAttributes:' \
       '      serviceAccountTokenAudience: api://AKSIdentityBinding' \
+      '      cacheType: ServiceAccount' \
       '      requireServiceAccount: true' \
       '      optionalServiceAccountAnnotationKeys:' \
       '      - kubernetes.azure.com/acr-client-id' \
