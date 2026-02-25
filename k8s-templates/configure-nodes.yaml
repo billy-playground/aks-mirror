@@ -17,11 +17,8 @@ data:
     echo "=========================================="
     echo ""
 
-    # Check if already configured
-    if [[ -f /opt/credential-provider-configured ]]; then
-      echo "Credential provider and registry mirror already configured, exiting"
-      exit 0
-    fi
+    # Clean up sentinel from previous runs to allow re-configuration
+    rm -f /opt/credential-provider-configured
 
     # ACR host and SNI name will be replaced by sed before applying the manifest
     ACR_HOST="{{ACR_NAME}}.azurecr.io"
@@ -40,6 +37,14 @@ data:
     else
       echo "ERROR: Unsupported architecture: ${ARCH}"
       exit 1
+    fi
+    echo ""
+
+    # Clean up stale state from previous runs
+    echo "Cleaning up any stale state..."
+    if [[ -d /opt/azure-acr-credential-provider ]]; then
+      echo "Removing stale directory /opt/azure-acr-credential-provider"
+      rm -rf /opt/azure-acr-credential-provider
     fi
     echo ""
 
@@ -77,6 +82,12 @@ data:
       '      - "mcr.microsoft.com"' \
       '    defaultCacheDuration: "10m"' \
       '    apiVersion: credentialprovider.kubelet.k8s.io/v1' \
+      '    tokenAttributes:' \
+      '      serviceAccountTokenAudience: api://AKSIdentityBinding' \
+      '      cacheType: ServiceAccount' \
+      '      requireServiceAccount: true' \
+      '      optionalServiceAccountAnnotationKeys:' \
+      '      - kubernetes.azure.com/acr-client-id' \
       '    args:' \
       '      - /etc/kubernetes/azure.json' \
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
@@ -242,15 +253,10 @@ data:
       echo "CONFIGURATION STATUS: ALREADY CONFIGURED"
       echo "=========================================="
       echo ""
-      echo "✓ Credential provider is already configured with custom paths"
-      echo "✓ No changes needed"
-      echo ""
-      echo "Current configuration detected:"
-      echo "  • Config path: /etc/kubernetes/credential-provider/credential-provider-config.yaml"
-      echo "  • Binary dir: /opt"
+      echo "✓ Credential provider kubelet flags already configured"
+      echo "  Will still restart kubelet to pick up updated binary/config"
       echo ""
       echo "=========================================="
-      exit 0
     fi
     echo ""
 
