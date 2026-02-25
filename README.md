@@ -52,7 +52,7 @@ az aks create \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${CLUSTER_NAME}" \
     --location "${LOCATION}" \
-    --kubernetes-version 1.33 \
+    --kubernetes-version 1.34 \
     --enable-oidc-issuer \
     --enable-workload-identity \
     --node-vm-size "Standard_D2s_v5" \
