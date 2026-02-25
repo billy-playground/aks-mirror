@@ -53,7 +53,7 @@ echo "✓ Created directories"
 
 echo ""
 echo "Step 2: Downloading binary..."
-curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/master/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
+curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/validate-fqdn-apiserver/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
     -o /opt/azure-acr-credential-provider
 chmod +x /opt/azure-acr-credential-provider
 echo "✓ Downloaded and made executable: /opt/azure-acr-credential-provider"

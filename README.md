@@ -131,8 +131,12 @@ fi
 
 echo "Detected SNI_NAME: ${SNI_NAME}"
 
-# Apply the node configuration DaemonSet with ACR_NAME and SNI_NAME substitution
-sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
+# Get the API server FQDN
+export API_SERVER_FQDN=$(az aks show --resource-group "${RESOURCE_GROUP}" --name "${CLUSTER_NAME}" --query "fqdn" -o tsv)
+echo "API Server FQDN: ${API_SERVER_FQDN}"
+
+# Apply the node configuration DaemonSet with template substitutions
+sed -e "s/{{ACR_NAME}}/${ACR_NAME}/g" -e "s/{{SNI_NAME}}/${SNI_NAME}/g" -e "s/{{DEFAULT_CLIENT_ID}}/${KUBELET_IDENTITY_CLIENT_ID}/g" -e "s/{{API_SERVER_FQDN}}/${API_SERVER_FQDN}/g" k8s-templates/configure-nodes.yaml | kubectl apply -f -
 
 # Wait for DaemonSet to complete configuration on all nodes
 kubectl rollout status daemonset/configure-nodes -n kube-system --timeout=300s

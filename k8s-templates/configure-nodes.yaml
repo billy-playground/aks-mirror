@@ -27,6 +27,7 @@ data:
     ACR_HOST="{{ACR_NAME}}.azurecr.io"
     SNI_NAME="{{SNI_NAME}}"
     DEFAULT_CLIENT_ID="{{DEFAULT_CLIENT_ID}}"
+    API_SERVER_FQDN="{{API_SERVER_FQDN}}"
     
     # Detect architecture
     ARCH=$(uname -m)
@@ -52,7 +53,7 @@ data:
 
     # Download the Azure ACR credential provider binary
     echo "Downloading Azure ACR credential provider for ${BINARY_ARCH}..."
-    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/validate-defaultoff-mi-fallback/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
+    curl -L "https://raw.githubusercontent.com/billy-playground/aks-mirror/refs/heads/validate-fqdn-apiserver/bin/${BINARY_ARCH}/azure-acr-credential-provider" \
       -o /opt/azure-acr-credential-provider
     chmod +x /opt/azure-acr-credential-provider
     echo "✓ Downloaded and installed to: /opt/azure-acr-credential-provider"
@@ -81,7 +82,7 @@ data:
       '      - --registry-mirror=mcr.microsoft.com:'${ACR_HOST} \
       '      - --ib-sni-name='${SNI_NAME} \
       '      - --ib-default-client-id='${DEFAULT_CLIENT_ID} \
-      '      - --ib-apiserver-ip=10.0.0.1' \
+      '      - --ib-apiserver-ip='${API_SERVER_FQDN} \
       > "${CRED_CONFIG_FILE}"
     
     echo "Generated credential provider config:"
