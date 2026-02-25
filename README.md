@@ -73,6 +73,20 @@ export KUBELET_IDENTITY_OBJECT_ID="$(az aks show \
     --name "${CLUSTER_NAME}" \
     --query 'identityProfile.kubeletidentity.objectId' \
     --output tsv)"
+
+export KUBELET_IDENTITY_RESOURCE_ID="$(az aks show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CLUSTER_NAME}" \
+    --query 'identityProfile.kubeletidentity.resourceId' \
+    --output tsv)"
+
+# Create identity binding for kubelet identity
+az aks identity-binding create \
+    --resource-group "${RESOURCE_GROUP}" \
+    --cluster-name "${CLUSTER_NAME}" \
+    --name "kubelet-identity-binding-$RANDOM_ID" \
+    --managed-identity-resource-id "${KUBELET_IDENTITY_RESOURCE_ID}"
+
 # Create Azure Container Registry
 az acr create \
     --name "${ACR_NAME}" \
@@ -95,12 +109,70 @@ az role assignment create \
     --scope "/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
 ```
 
-## Step 2: Configure Credential Provider on AKS Nodes
+## Step 2: Configure Identity Binding and Service Account
 
 ```bash
-# Set namespace for tests
+# Set up service account variables
 export SERVICE_ACCOUNT_NAMESPACE="default"
+export SERVICE_ACCOUNT_NAME="workload-identity-sa$RANDOM_ID"
 
+# Create Service Account and RBAC for identity binding
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${SERVICE_ACCOUNT_NAME}
+  namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: request-sa-token-audience
+rules:
+- verbs: ["request-serviceaccounts-token-audience"]
+  apiGroups: [""]
+  resources: ["api://AKSIdentityBinding"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubelet-node-permissions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: request-sa-token-audience
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+rules:
+- verbs: ["use-managed-identity"]
+  apiGroups: ["cid.wi.aks.azure.com"]
+  resources: ["${KUBELET_IDENTITY_CLIENT_ID}"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: use-ki-${KUBELET_IDENTITY_CLIENT_ID}
+subjects:
+- kind: Group
+  name: system:serviceaccounts
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+## Step 3: Deploy Test Pod and Configure Credential Provider on AKS Nodes
+
+```bash
 # Deploy a test pod to obtain SNI configuration
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -108,7 +180,12 @@ kind: Pod
 metadata:
   name: test-shell
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
+  labels:
+    azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/use-identity-binding: "true"
 spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
   - name: azure-cli
     image: mcr.microsoft.com/azure-cli:cbl-mariner2.0
@@ -125,7 +202,7 @@ SNI_NAME=$(kubectl get pod test-shell -n ${SERVICE_ACCOUNT_NAMESPACE} -o jsonpat
 
 if [[ -z "${SNI_NAME}" ]]; then
   echo "ERROR: Could not detect SNI_NAME from test pod"
-  echo "Please ensure the pod has workload identity annotations and is running"
+  echo "Please ensure the identity binding is created and the pod has the workload identity label"
   return 1
 fi
 
@@ -151,7 +228,7 @@ You can use the troubleshooting scripts to check the configuration status on eac
 ./scripts/get-nodes.sh ${CLUSTER_NAME} ${RESOURCE_GROUP}
 ```
 
-## Step 3: Verify ACR Pull with Test Pod
+## Step 4: Verify ACR Pull with Test Pod
 
 ```bash
 # Deploy another test pod that pulls an image from ACR (via artifact cache)
@@ -162,6 +239,7 @@ metadata:
   name: test-acr-pull
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
 spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
   - name: hello-world
     image: ${ACR_NAME}.azurecr.io/mcr/hello-world:latest
@@ -174,7 +252,7 @@ kubectl get pod test-acr-pull -n ${SERVICE_ACCOUNT_NAMESPACE} --watch
 
 If the pod reaches "Completed" status, your ACR credential provider setup is working correctly!
 
-## Step 4: Test Registry Mirror with MCR Image
+## Step 5: Test Registry Mirror with MCR Image
 
 ```bash
 # Deploy a test pod that pulls directly from mcr.microsoft.com
@@ -186,6 +264,7 @@ metadata:
   name: test-mcr-mirror
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
 spec:
+  serviceAccountName: ${SERVICE_ACCOUNT_NAME}
   containers:
   - name: hello-world
     image: mcr.microsoft.com/dotnet/samples:latest
